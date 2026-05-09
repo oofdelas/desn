@@ -1,0 +1,250 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+  local HWIDs_Autorizados = {
+    "EFDBDD6D403CF4237C43C567FFB3694AFA51F1E9D586D243F48ED2BB81BB9CDC91B62825EBD3A8D5D0031A54BDD8E68180550A9D1BCCC6596F519603846D4A8D",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+}
+
+local hwid_atual = gethwid()
+local autorizado = false
+
+-- Verifica o HWID
+for _, hwid in pairs(HWIDs_Autorizados) do
+    if hwid_atual == hwid then
+        autorizado = true
+        break
+    end
+end
+
+-- Se não autorizado
+if not autorizado then
+    -- Notificação
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "⚠️ Acesso Negado";
+        Text = "HWID não autorizado!";
+        Duration = 5;
+    })
+    
+    -- Aguarda 2 segundos e kicka
+    wait(2)
+    game.Players.LocalPlayer:Kick("❌ ACESSO NEGADO\n\nSeu HWID não está na whitelist!\n\nHWID: " .. hwid_atual .. "\n\nContate o administrador.")
+    return
+end
+
+-- Notificação de sucesso
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "✓ Acesso Autorizado";
+    Text = "Script carregado!";
+    Duration = 3;
+})
+
+print("Script iniciado com sucesso!")
+-- [[ ALBUX DESYNC - IMMORTAL EDITION ]]
+-- Sistema Anti-Crash + Watchdog + Detecção por Eventos
+
+
+local lp = game:GetService("Players").LocalPlayer
+local CoreGui = game:GetService("CoreGui")
+
+-- [[ CONFIGURAÇÕES ]]
+local Config = {
+    DefaultDelay = 1.5,
+}
+
+local desync_active = false
+local last_heartbeat = tick()
+
+-- [[ UI - ALBUX DESYNC ]]
+local function CreateUI()
+    local AlbuxHub = Instance.new("ScreenGui")
+    local MainFrame = Instance.new("Frame")
+    local UICorner = Instance.new("UICorner")
+    local UIStroke = Instance.new("UIStroke")
+    local Header = Instance.new("Frame")
+    local Title = Instance.new("TextLabel")
+    local Icon = Instance.new("TextLabel")
+    local StatusBox = Instance.new("Frame")
+    local StatusCorner = Instance.new("UICorner")
+    local StatusDot = Instance.new("Frame")
+    local DotCorner = Instance.new("UICorner")
+    local StatusText = Instance.new("TextLabel")
+    local FooterText = Instance.new("TextLabel")
+
+   AlbuxHub.Name = "AlbuxDesync_Immortal"
+    AlbuxHub.Parent = (gethui and gethui()) or CoreGui
+    AlbuxHub.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    MainFrame.Name = "MainFrame"
+    MainFrame.Parent = AlbuxHub
+    MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    MainFrame.Position = UDim2.new(0.02, 0, 0.8, 0)
+    MainFrame.Size = UDim2.new(0, 260, 0, 100)
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+
+    UICorner.CornerRadius = UDim.new(0, 10)
+    UICorner.Parent = MainFrame
+
+    UIStroke.Parent = MainFrame
+    UIStroke.Thickness = 1.5
+    UIStroke.Color = Color3.fromRGB(45, 45, 65)
+    UIStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+    Header.Name = "Header"
+    Header.Parent = MainFrame
+    Header.BackgroundTransparency = 1.000
+    Header.Size = UDim2.new(1, 0, 0, 35)
+
+    Icon.Name = "Icon"
+    Icon.Parent = Header
+    Icon.BackgroundTransparency = 1.000
+    Icon.Position = UDim2.new(0, 12, 0, 8)
+    Icon.Size = UDim2.new(0, 20, 0, 20)
+    Icon.Font = Enum.Font.GothamBold
+    Icon.Text = "🌀"
+    Icon.TextSize = 16
+    Icon.TextColor3 = Color3.fromRGB(0, 170, 255)
+
+    Title.Name = "Title"
+    Title.Parent = Header
+    Title.BackgroundTransparency = 1.000
+    Title.Position = UDim2.new(0, 38, 0, 8)
+    Title.Size = UDim2.new(0, 150, 0, 20)
+    Title.Font = Enum.Font.GothamBold
+    Title.Text = "Albux Desync"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.TextSize = 15
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+
+    StatusBox.Name = "StatusBox"
+    StatusBox.Parent = MainFrame
+    StatusBox.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    StatusBox.Position = UDim2.new(0, 12, 0, 40)
+    StatusBox.Size = UDim2.new(1, -24, 0, 30)
+
+    StatusCorner.CornerRadius = UDim.new(0, 6)
+    StatusCorner.Parent = StatusBox
+
+    StatusDot.Name = "StatusDot"
+    StatusDot.Parent = StatusBox
+    StatusDot.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
+    StatusDot.Position = UDim2.new(0, 10, 0.5, -4)
+    StatusDot.Size = UDim2.new(0, 8, 0, 8)
+
+    DotCorner.CornerRadius = UDim.new(1, 0)
+    DotCorner.Parent = StatusDot
+
+    StatusText.Name = "StatusText"
+    StatusText.Parent = StatusBox
+    StatusText.BackgroundTransparency = 1.000
+    StatusText.Position = UDim2.new(0, 25, 0, 0)
+    StatusText.Size = UDim2.new(1, -30, 1, 0)
+    StatusText.Font = Enum.Font.GothamSemibold
+    StatusText.Text = "System Online -- Monitoring"
+    StatusText.TextColor3 = Color3.fromRGB(180, 180, 190)
+    StatusText.TextSize = 12
+    StatusText.TextXAlignment = Enum.TextXAlignment.Left
+
+    FooterText.Name = "FooterText"
+    FooterText.Parent = MainFrame
+    FooterText.BackgroundTransparency = 1.000
+    FooterText.Position = UDim2.new(0, 12, 0, 75)
+    FooterText.Size = UDim2.new(1, -24, 0, 20)
+    FooterText.Font = Enum.Font.Gotham
+    FooterText.Text = "Albux Desync v4.0"
+    FooterText.TextColor3 = Color3.fromRGB(100, 100, 120)
+    FooterText.TextSize = 11
+    FooterText.TextXAlignment = Enum.TextXAlignment.Left
+
+    return StatusText, StatusDot
+end
+
+local StatusText, StatusDot = CreateUI()
+
+-- [[ LÓGICA DE DESYNC ]]
+local function desync_send(packet)
+    if not desync_active then return end
+    if packet.PacketId == 0x1B then
+        local b = packet.AsBuffer
+        buffer.writeu32(b, 1, 0xFFFFFFFF)
+        buffer.writeu32(b, 5, 0xFFFFFFFF)
+        buffer.writeu32(b, 9, 0xFFFFFFFF)
+        packet:SetData(b)
+    end
+end
+
+local function desync_recv(packet)
+    if not desync_active then return end
+    if packet.PacketId == 0x1B or packet.PacketId == 0x86 then
+        packet:Drop()
+    end
+end
+
+pcall(function()
+    raknet.add_send_hook(desync_send)
+    raknet.add_recv_hook(desync_recv)
+end)
+
+-- [[ MOTOR DE GERENCIAMENTO IMORTAL ]]
+local function start_protection()
+    task.spawn(function()
+        while true do
+            last_heartbeat = tick() -- Atualiza o batimento cardíaco
+            local isStealing = lp:GetAttribute("Stealing")
+            
+            if isStealing then
+                StatusText.Text = "PROTECTION ACTIVE (3S)"
+                StatusText.TextColor3 = Color3.fromRGB(0, 170, 255)
+                StatusDot.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+                
+                desync_active = true
+                task.wait(Config.DefaultDelay)
+                
+                desync_active = false
+                task.wait(0.05)
+            else
+                desync_active = false
+                StatusText.Text = "System Online -- Monitoring"
+                StatusText.TextColor3 = Color3.fromRGB(180, 180, 190)
+                StatusDot.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
+                task.wait(0.2)
+            end
+        end
+    end)
+end
+
+-- [[ WATCHDOG - O SUPERVISOR ]]
+-- Se o loop principal parar por mais de 2 segundos, ele reinicia o motor
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if tick() - last_heartbeat > 2 then
+            print("Albux Watchdog: Detectado travamento, reiniciando motor...")
+            start_protection()
+        end
+    end
+end)
+
+-- Início inicial
+start_protection()
+
+-- Detecção extra por sinal (Garante que não perca o início do roubo)
+lp:GetAttributeChangedSignal("Stealing"):Connect(function()
+    if lp:GetAttribute("Stealing") then
+        desync_active = true
+    else
+        desync_active = false
+    end
+end)
+
+print("Albux Desync  Carregado!")
