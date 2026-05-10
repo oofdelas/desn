@@ -1,0 +1,283 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+  local HWIDs_Autorizados = {
+    "e25d0b1c22d02c4b8602eb75c9b3780d6aec7cf6309e206a908db7b7ed8a7b97",
+    "e8c655423b756ddd56687026077f3c8b7fa76e3af6a24d77522b52c539216d33",
+    "e7acbca7f86916bd22825feb20ea88ca6bd5cdf168747a1d3238fbbd98bbdd07",
+    "0aacdafe4fd20c70647f7efc9ff865905691d8258a1bb65d0ebc3091c1eba4c6",
+    "950ba22b27397008051ee19e385254d912812cbb1c4b77dd23b319f4454113a2",
+    "c09622852499faefa5a5f93d42e8aafb79df8430136f826c0d051c07c2dc881f",
+    "2c6aff28d064dc884a95722fc6a34f251dcccd1b186b45e5da1bf10d25327f9e",
+    "e383bd403c3fca227a17d39efab6f46c05a4c373510e9030f200b0f90af37fa5",
+    "5bfdc05d623ea2363cdcadea31a1da47c3534631a7eddafdbbc5115a3b46cdc0",
+    "4a77db7556f7e12ac20efdd2356d9b43aa745e4c8fea7169aca3918f87e2a178",
+    "8f20926e103e523fb1a45e520a549af3097e8bfedc3e5c31c341ec2acbe4793d,
+    "a",
+}
+
+local hwid_atual = gethwid()
+local autorizado = false
+
+-- Verifica o HWID
+for _, hwid in pairs(HWIDs_Autorizados) do
+    if hwid_atual == hwid then
+        autorizado = true
+        break
+    end
+end
+
+-- Se não autorizado
+if not autorizado then
+    -- Notificação
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "⚠️ Acesso Negado";
+        Text = "HWID não autorizado!";
+        Duration = 5;
+    })
+    
+    -- Aguarda 2 segundos e kicka
+    wait(2)
+    game.Players.LocalPlayer:Kick("❌ ACESSO NEGADO\n\nSeu HWID não está na whitelist!\n\nHWID: " .. hwid_atual .. "\n\nContate o administrador.")
+    return
+end
+
+-- Notificação de sucesso
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "✓ Acesso Autorizado";
+    Text = "Script carregado!";
+    Duration = 3;
+})
+
+print("Script iniciado com sucesso!")
+
+-- ╔══════════════════════════════════════════════╗
+-- ║   NOTZ DESYNC  V4 (STEAL-ONLY LOGIC)        ║
+-- ╚══════════════════════════════════════════════╝
+
+repeat task.wait() until game:IsLoaded()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+
+local lp = Players.LocalPlayer
+
+if not raknet then
+    return
+end
+
+local State = {
+    desync = false, -- Começa desativado
+    stealing = false
+}
+
+-- última posição válida enviada pro servidor
+local lastSafePos
+
+--// DESYNC HOOKS
+local function send_hook(packet)
+    -- Só funciona se estiver roubando E o desync estiver ativo no ciclo
+    if not State.stealing or not State.desync then
+        return
+    end
+
+    if packet.PacketId == 0x1B then
+        local b = packet.AsBuffer
+        buffer.writeu32(b, 1, 0xFFFFFFFF)
+        buffer.writeu32(b, 5, 0xFFFFFFFF)
+        buffer.writeu32(b, 9, 0xFFFFFFFF)
+        packet:SetData(b)
+    end
+end
+
+local function recv_hook(packet)
+    -- Só funciona se estiver roubando E o desync estiver ativo no ciclo
+    if not State.stealing or not State.desync then
+        return
+    end
+
+    if packet.PacketId == 0x1B or packet.PacketId == 0x86 then
+        packet:Drop()
+    end
+end
+
+pcall(function()
+    if raknet.add_send_hook then
+        raknet.add_send_hook(send_hook)
+    end
+end)
+
+pcall(function()
+    if raknet.add_recv_hook then
+        raknet.add_recv_hook(recv_hook)
+    end
+end)
+
+--// CORE LOGIC (Ativação e Ciclo de Sincronização)
+task.spawn(function()
+    while true do
+        local isStealing = lp:GetAttribute("Stealing") == true
+        State.stealing = isStealing
+
+        if isStealing then
+            -- Ativa o desync no início do roubo
+            State.desync = true
+            
+            -- Ciclo de 8 segundos (conforme sua base)
+            task.wait(8)
+
+            -- Se ainda estiver roubando, faz o blink de sincronização
+            if lp:GetAttribute("Stealing") == true then
+                State.desync = false
+                task.wait(0.15)
+                -- Reativa apenas se o roubo continuar
+                if lp:GetAttribute("Stealing") == true then
+                    State.desync = true
+                end
+            end
+        else
+            -- Se não estiver roubando, desliga o desync imediatamente
+            State.desync = false
+            task.wait(0.2)
+        end
+    end
+end)
+
+--// ROLLBACK SYSTEM (Salva última posição segura)
+task.spawn(function()
+    while true do
+        local char = lp.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            -- Só salva posição segura se NÃO estiver roubando OU se o desync estiver em blink (OFF)
+            if not State.stealing or not State.desync then
+                lastSafePos = char.HumanoidRootPart.Position
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+--// UI
+local gui = Instance.new("ScreenGui")
+gui.Name = "AlbuxDesyncUI"
+gui.ResetOnSpawn = false
+gui.Parent = (gethui and gethui()) or game.CoreGui
+
+local frame = Instance.new("Frame")
+frame.Parent = gui
+frame.Size = UDim2.new(0, 220, 0, 65)
+frame.Position = UDim2.new(0.5, -110, 0.15, 0)
+frame.BackgroundColor3 = Color3.fromRGB(20,0,0)
+frame.BorderSizePixel = 0
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0,14)
+
+local stroke = Instance.new("UIStroke", frame)
+stroke.Color = Color3.fromRGB(255,40,40)
+stroke.Thickness = 2
+
+local gradient = Instance.new("UIGradient", frame)
+gradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(45,0,0)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(15,0,0))
+}
+gradient.Rotation = 90
+
+local title = Instance.new("TextLabel", frame)
+title.BackgroundTransparency = 1
+title.Size = UDim2.new(1,0,0.5,0)
+title.Position = UDim2.new(0,0,0,2)
+title.Font = Enum.Font.GothamBlack
+title.Text = "ALBUX DESYNC"
+title.TextColor3 = Color3.fromRGB(255,70,70)
+title.TextSize = 20
+
+local status = Instance.new("TextLabel", frame)
+status.Parent = frame
+status.BackgroundTransparency = 1
+status.Size = UDim2.new(1,0,0.4,0)
+status.Position = UDim2.new(0,0,0.5,-2)
+status.Font = Enum.Font.GothamBold
+status.Text = "WAITING..."
+status.TextColor3 = Color3.fromRGB(255,255,255)
+status.TextSize = 14
+
+local dot = Instance.new("Frame", frame)
+dot.Size = UDim2.new(0,10,0,10)
+dot.Position = UDim2.new(0,18,0.68,0)
+dot.BackgroundColor3 = Color3.fromRGB(255,40,40)
+dot.BorderSizePixel = 0
+Instance.new("UICorner", dot).CornerRadius = UDim.new(1,0)
+
+-- Loop de animação do ponto e atualização de status
+task.spawn(function()
+    while true do
+        if State.stealing and State.desync then
+            status.Text = "DESYNC ACTIVE"
+            status.TextColor3 = Color3.fromRGB(0, 255, 100)
+            dot.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
+        else
+            status.Text = "DESYNC INACTIVE"
+            status.TextColor3 = Color3.fromRGB(255, 255, 255)
+            dot.BackgroundColor3 = Color3.fromRGB(255, 40, 40)
+        end
+        
+        -- Efeito de pulso
+        for i = 0,1,0.1 do
+            dot.BackgroundTransparency = i
+            task.wait(0.05)
+        end
+        for i = 1,0,-0.1 do
+            dot.BackgroundTransparency = i
+            task.wait(0.05)
+        end
+    end
+end)
+
+--// DRAG SYSTEM
+local dragging, dragStart, startPos
+frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragStart = input.Position; startPos = frame.Position
+    end
+end)
+UIS.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+--// ROLLBACK BALL (Visualização)
+local rollbackBall = Instance.new("Part")
+rollbackBall.Name = "AlbuxRollbackPosition"
+rollbackBall.Shape = Enum.PartType.Ball
+rollbackBall.Material = Enum.Material.Neon
+rollbackBall.Size = Vector3.new(1.8,1.8,1.8)
+rollbackBall.Color = Color3.fromRGB(255,0,0)
+rollbackBall.Anchored = true
+rollbackBall.CanCollide = false
+rollbackBall.Transparency = 1
+rollbackBall.Parent = workspace
+
+local hl = Instance.new("Highlight")
+hl.FillColor = Color3.fromRGB(255,0,0)
+hl.OutlineColor = Color3.fromRGB(255,255,255)
+hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+hl.Parent = rollbackBall
+
+RunService.RenderStepped:Connect(function()
+    if lastSafePos and State.stealing and State.desync then
+        rollbackBall.Position = lastSafePos
+        rollbackBall.Transparency = 0.5
+    else
+        rollbackBall.Transparency = 1
+    end
+end)
+
+print("[ALBUX DESYNC V4] Loaded - Steal-only logic active")
