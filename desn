@@ -49,131 +49,39 @@ game:GetService("StarterGui"):SetCore("SendNotification", {
 })
 
 print("Script iniciado com sucesso!")
--- [[ ALBUX DESYNC - IMMORTAL EDITION ]]
--- Sistema Anti-Crash + Watchdog + Detecção por Eventos
 
+-- ╔══════════════════════════════════════════════╗
+-- ║   NOTZ DESYNC  V4 (STEAL-ONLY LOGIC)        ║
+-- ╚══════════════════════════════════════════════╝
 
-local lp = game:GetService("Players").LocalPlayer
-local CoreGui = game:GetService("CoreGui")
+repeat task.wait() until game:IsLoaded()
 
--- [[ CONFIGURAÇÕES ]]
-local Config = {
-    DefaultDelay = 1.5,
-}
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
 
-local desync_active = false
-local last_heartbeat = tick()
+local lp = Players.LocalPlayer
 
--- [[ UI - ALBUX DESYNC ]]
-local function CreateUI()
-    local AlbuxHub = Instance.new("ScreenGui")
-    local MainFrame = Instance.new("Frame")
-    local UICorner = Instance.new("UICorner")
-    local UIStroke = Instance.new("UIStroke")
-    local Header = Instance.new("Frame")
-    local Title = Instance.new("TextLabel")
-    local Icon = Instance.new("TextLabel")
-    local StatusBox = Instance.new("Frame")
-    local StatusCorner = Instance.new("UICorner")
-    local StatusDot = Instance.new("Frame")
-    local DotCorner = Instance.new("UICorner")
-    local StatusText = Instance.new("TextLabel")
-    local FooterText = Instance.new("TextLabel")
-
-   AlbuxHub.Name = "AlbuxDesync_Immortal"
-    AlbuxHub.Parent = (gethui and gethui()) or CoreGui
-    AlbuxHub.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-    MainFrame.Name = "MainFrame"
-    MainFrame.Parent = AlbuxHub
-    MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-    MainFrame.Position = UDim2.new(0.02, 0, 0.8, 0)
-    MainFrame.Size = UDim2.new(0, 260, 0, 100)
-    MainFrame.Active = true
-    MainFrame.Draggable = true
-
-    UICorner.CornerRadius = UDim.new(0, 10)
-    UICorner.Parent = MainFrame
-
-    UIStroke.Parent = MainFrame
-    UIStroke.Thickness = 1.5
-    UIStroke.Color = Color3.fromRGB(45, 45, 65)
-    UIStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
-    Header.Name = "Header"
-    Header.Parent = MainFrame
-    Header.BackgroundTransparency = 1.000
-    Header.Size = UDim2.new(1, 0, 0, 35)
-
-    Icon.Name = "Icon"
-    Icon.Parent = Header
-    Icon.BackgroundTransparency = 1.000
-    Icon.Position = UDim2.new(0, 12, 0, 8)
-    Icon.Size = UDim2.new(0, 20, 0, 20)
-    Icon.Font = Enum.Font.GothamBold
-    Icon.Text = "🌀"
-    Icon.TextSize = 16
-    Icon.TextColor3 = Color3.fromRGB(0, 170, 255)
-
-    Title.Name = "Title"
-    Title.Parent = Header
-    Title.BackgroundTransparency = 1.000
-    Title.Position = UDim2.new(0, 38, 0, 8)
-    Title.Size = UDim2.new(0, 150, 0, 20)
-    Title.Font = Enum.Font.GothamBold
-    Title.Text = "Albux Desync"
-    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Title.TextSize = 15
-    Title.TextXAlignment = Enum.TextXAlignment.Left
-
-    StatusBox.Name = "StatusBox"
-    StatusBox.Parent = MainFrame
-    StatusBox.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-    StatusBox.Position = UDim2.new(0, 12, 0, 40)
-    StatusBox.Size = UDim2.new(1, -24, 0, 30)
-
-    StatusCorner.CornerRadius = UDim.new(0, 6)
-    StatusCorner.Parent = StatusBox
-
-    StatusDot.Name = "StatusDot"
-    StatusDot.Parent = StatusBox
-    StatusDot.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
-    StatusDot.Position = UDim2.new(0, 10, 0.5, -4)
-    StatusDot.Size = UDim2.new(0, 8, 0, 8)
-
-    DotCorner.CornerRadius = UDim.new(1, 0)
-    DotCorner.Parent = StatusDot
-
-    StatusText.Name = "StatusText"
-    StatusText.Parent = StatusBox
-    StatusText.BackgroundTransparency = 1.000
-    StatusText.Position = UDim2.new(0, 25, 0, 0)
-    StatusText.Size = UDim2.new(1, -30, 1, 0)
-    StatusText.Font = Enum.Font.GothamSemibold
-    StatusText.Text = "System Online -- Monitoring"
-    StatusText.TextColor3 = Color3.fromRGB(180, 180, 190)
-    StatusText.TextSize = 12
-    StatusText.TextXAlignment = Enum.TextXAlignment.Left
-
-    FooterText.Name = "FooterText"
-    FooterText.Parent = MainFrame
-    FooterText.BackgroundTransparency = 1.000
-    FooterText.Position = UDim2.new(0, 12, 0, 75)
-    FooterText.Size = UDim2.new(1, -24, 0, 20)
-    FooterText.Font = Enum.Font.Gotham
-    FooterText.Text = "Albux Desync v4.0"
-    FooterText.TextColor3 = Color3.fromRGB(100, 100, 120)
-    FooterText.TextSize = 11
-    FooterText.TextXAlignment = Enum.TextXAlignment.Left
-
-    return StatusText, StatusDot
+if not raknet then
+    return
 end
 
-local StatusText, StatusDot = CreateUI()
+local State = {
+    desync = false, -- Começa desativado
+    stealing = false
+}
 
--- [[ LÓGICA DE DESYNC ]]
-local function desync_send(packet)
-    if not desync_active then return end
+-- última posição válida enviada pro servidor
+local lastSafePos
+
+--// DESYNC HOOKS
+local function send_hook(packet)
+    -- Só funciona se estiver roubando E o desync estiver ativo no ciclo
+    if not State.stealing or not State.desync then
+        return
+    end
+
     if packet.PacketId == 0x1B then
         local b = packet.AsBuffer
         buffer.writeu32(b, 1, 0xFFFFFFFF)
@@ -183,68 +91,193 @@ local function desync_send(packet)
     end
 end
 
-local function desync_recv(packet)
-    if not desync_active then return end
+local function recv_hook(packet)
+    -- Só funciona se estiver roubando E o desync estiver ativo no ciclo
+    if not State.stealing or not State.desync then
+        return
+    end
+
     if packet.PacketId == 0x1B or packet.PacketId == 0x86 then
         packet:Drop()
     end
 end
 
 pcall(function()
-    raknet.add_send_hook(desync_send)
-    raknet.add_recv_hook(desync_recv)
+    if raknet.add_send_hook then
+        raknet.add_send_hook(send_hook)
+    end
 end)
 
--- [[ MOTOR DE GERENCIAMENTO IMORTAL ]]
-local function start_protection()
-    task.spawn(function()
-        while true do
-            last_heartbeat = tick() -- Atualiza o batimento cardíaco
-            local isStealing = lp:GetAttribute("Stealing")
-            
-            if isStealing then
-                StatusText.Text = "PROTECTION ACTIVE (3S)"
-                StatusText.TextColor3 = Color3.fromRGB(0, 170, 255)
-                StatusDot.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-                
-                desync_active = true
-                task.wait(Config.DefaultDelay)
-                
-                desync_active = false
-                task.wait(0.05)
-            else
-                desync_active = false
-                StatusText.Text = "System Online -- Monitoring"
-                StatusText.TextColor3 = Color3.fromRGB(180, 180, 190)
-                StatusDot.BackgroundColor3 = Color3.fromRGB(0, 255, 150)
-                task.wait(0.2)
-            end
-        end
-    end)
-end
+pcall(function()
+    if raknet.add_recv_hook then
+        raknet.add_recv_hook(recv_hook)
+    end
+end)
 
--- [[ WATCHDOG - O SUPERVISOR ]]
--- Se o loop principal parar por mais de 2 segundos, ele reinicia o motor
+--// CORE LOGIC (Ativação e Ciclo de Sincronização)
 task.spawn(function()
     while true do
-        task.wait(1)
-        if tick() - last_heartbeat > 2 then
-            print("Albux Watchdog: Detectado travamento, reiniciando motor...")
-            start_protection()
+        local isStealing = lp:GetAttribute("Stealing") == true
+        State.stealing = isStealing
+
+        if isStealing then
+            -- Ativa o desync no início do roubo
+            State.desync = true
+            
+            -- Ciclo de 8 segundos (conforme sua base)
+            task.wait(8)
+
+            -- Se ainda estiver roubando, faz o blink de sincronização
+            if lp:GetAttribute("Stealing") == true then
+                State.desync = false
+                task.wait(0.15)
+                -- Reativa apenas se o roubo continuar
+                if lp:GetAttribute("Stealing") == true then
+                    State.desync = true
+                end
+            end
+        else
+            -- Se não estiver roubando, desliga o desync imediatamente
+            State.desync = false
+            task.wait(0.2)
         end
     end
 end)
 
--- Início inicial
-start_protection()
-
--- Detecção extra por sinal (Garante que não perca o início do roubo)
-lp:GetAttributeChangedSignal("Stealing"):Connect(function()
-    if lp:GetAttribute("Stealing") then
-        desync_active = true
-    else
-        desync_active = false
+--// ROLLBACK SYSTEM (Salva última posição segura)
+task.spawn(function()
+    while true do
+        local char = lp.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            -- Só salva posição segura se NÃO estiver roubando OU se o desync estiver em blink (OFF)
+            if not State.stealing or not State.desync then
+                lastSafePos = char.HumanoidRootPart.Position
+            end
+        end
+        task.wait(0.1)
     end
 end)
 
-print("Albux Desync  Carregado!")
+--// UI
+local gui = Instance.new("ScreenGui")
+gui.Name = "AlbuxDesyncUI"
+gui.ResetOnSpawn = false
+gui.Parent = (gethui and gethui()) or game.CoreGui
+
+local frame = Instance.new("Frame")
+frame.Parent = gui
+frame.Size = UDim2.new(0, 220, 0, 65)
+frame.Position = UDim2.new(0.5, -110, 0.15, 0)
+frame.BackgroundColor3 = Color3.fromRGB(20,0,0)
+frame.BorderSizePixel = 0
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0,14)
+
+local stroke = Instance.new("UIStroke", frame)
+stroke.Color = Color3.fromRGB(255,40,40)
+stroke.Thickness = 2
+
+local gradient = Instance.new("UIGradient", frame)
+gradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(45,0,0)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(15,0,0))
+}
+gradient.Rotation = 90
+
+local title = Instance.new("TextLabel", frame)
+title.BackgroundTransparency = 1
+title.Size = UDim2.new(1,0,0.5,0)
+title.Position = UDim2.new(0,0,0,2)
+title.Font = Enum.Font.GothamBlack
+title.Text = "ALBUX DESYNC"
+title.TextColor3 = Color3.fromRGB(255,70,70)
+title.TextSize = 20
+
+local status = Instance.new("TextLabel", frame)
+status.Parent = frame
+status.BackgroundTransparency = 1
+status.Size = UDim2.new(1,0,0.4,0)
+status.Position = UDim2.new(0,0,0.5,-2)
+status.Font = Enum.Font.GothamBold
+status.Text = "WAITING..."
+status.TextColor3 = Color3.fromRGB(255,255,255)
+status.TextSize = 14
+
+local dot = Instance.new("Frame", frame)
+dot.Size = UDim2.new(0,10,0,10)
+dot.Position = UDim2.new(0,18,0.68,0)
+dot.BackgroundColor3 = Color3.fromRGB(255,40,40)
+dot.BorderSizePixel = 0
+Instance.new("UICorner", dot).CornerRadius = UDim.new(1,0)
+
+-- Loop de animação do ponto e atualização de status
+task.spawn(function()
+    while true do
+        if State.stealing and State.desync then
+            status.Text = "DESYNC ACTIVE"
+            status.TextColor3 = Color3.fromRGB(0, 255, 100)
+            dot.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
+        else
+            status.Text = "DESYNC INACTIVE"
+            status.TextColor3 = Color3.fromRGB(255, 255, 255)
+            dot.BackgroundColor3 = Color3.fromRGB(255, 40, 40)
+        end
+        
+        -- Efeito de pulso
+        for i = 0,1,0.1 do
+            dot.BackgroundTransparency = i
+            task.wait(0.05)
+        end
+        for i = 1,0,-0.1 do
+            dot.BackgroundTransparency = i
+            task.wait(0.05)
+        end
+    end
+end)
+
+--// DRAG SYSTEM
+local dragging, dragStart, startPos
+frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragStart = input.Position; startPos = frame.Position
+    end
+end)
+UIS.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+--// ROLLBACK BALL (Visualização)
+local rollbackBall = Instance.new("Part")
+rollbackBall.Name = "AlbuxRollbackPosition"
+rollbackBall.Shape = Enum.PartType.Ball
+rollbackBall.Material = Enum.Material.Neon
+rollbackBall.Size = Vector3.new(1.8,1.8,1.8)
+rollbackBall.Color = Color3.fromRGB(255,0,0)
+rollbackBall.Anchored = true
+rollbackBall.CanCollide = false
+rollbackBall.Transparency = 1
+rollbackBall.Parent = workspace
+
+local hl = Instance.new("Highlight")
+hl.FillColor = Color3.fromRGB(255,0,0)
+hl.OutlineColor = Color3.fromRGB(255,255,255)
+hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+hl.Parent = rollbackBall
+
+RunService.RenderStepped:Connect(function()
+    if lastSafePos and State.stealing and State.desync then
+        rollbackBall.Position = lastSafePos
+        rollbackBall.Transparency = 0.5
+    else
+        rollbackBall.Transparency = 1
+    end
+end)
+
+print("[ALBUX DESYNC V4] Loaded - Steal-only logic active")
