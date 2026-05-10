@@ -70,17 +70,46 @@ end
 
 local State = {
     desync = false,
-    stealing = false
+    stealing = false,
+    savedPosition = nil
 }
 
 local lastSafePos
+local lastSafeCFrame
+
+--// CONFIG SYSTEM (JSON)
+local configFolder = "AlbuxDesync"
+local configFile = configFolder .. "/ui_position.json"
+
+if not isfolder(configFolder) then
+    makefolder(configFolder)
+end
+
+local function saveUIPosition(position)
+    local data = {
+        X = position.X.Scale,
+        XOffset = position.X.Offset,
+        Y = position.Y.Scale,
+        YOffset = position.Y.Offset
+    }
+    writefile(configFile, HttpService:JSONEncode(data))
+end
+
+local function loadUIPosition()
+    if isfile(configFile) then
+        local success, data = pcall(function()
+            return HttpService:JSONDecode(readfile(configFile))
+        end)
+        if success and data then
+            return UDim2.new(data.X, data.XOffset, data.Y, data.YOffset)
+        end
+    end
+    return UDim2.new(0.5, -135, 0.1, 0)
+end
 
 --// DESYNC HOOKS
 local function send_hook(packet)
-    if not State.stealing or not State.desync then
-        return
-    end
-
+    if not State.stealing or not State.desync then return end
     if packet.PacketId == 0x1B then
         local b = packet.AsBuffer
         buffer.writeu32(b, 1, 0xFFFFFFFF)
@@ -91,25 +120,17 @@ local function send_hook(packet)
 end
 
 local function recv_hook(packet)
-    if not State.stealing or not State.desync then
-        return
-    end
-
+    if not State.stealing or not State.desync then return end
     if packet.PacketId == 0x1B or packet.PacketId == 0x86 then
         packet:Drop()
     end
 end
 
 pcall(function()
-    if raknet.add_send_hook then
-        raknet.add_send_hook(send_hook)
-    end
+    if raknet.add_send_hook then raknet.add_send_hook(send_hook) end
 end)
-
 pcall(function()
-    if raknet.add_recv_hook then
-        raknet.add_recv_hook(recv_hook)
-    end
+    if raknet.add_recv_hook then raknet.add_recv_hook(recv_hook) end
 end)
 
 --// CORE LOGIC
@@ -121,7 +142,6 @@ task.spawn(function()
         if isStealing then
             State.desync = true
             task.wait(8)
-
             if lp:GetAttribute("Stealing") == true then
                 State.desync = false
                 task.wait(0.15)
@@ -143,189 +163,491 @@ task.spawn(function()
         if char and char:FindFirstChild("HumanoidRootPart") then
             if not State.stealing or not State.desync then
                 lastSafePos = char.HumanoidRootPart.Position
+                lastSafeCFrame = char.HumanoidRootPart.CFrame
             end
         end
         task.wait(0.1)
     end
 end)
 
---// COMPACT MODERN UI
+--// SKELETON SYSTEM
+-- Pares de partes para desenhar ossos entre elas
+local BONE_PAIRS = {
+    {"Head",         "UpperTorso"},
+    {"UpperTorso",   "LowerTorso"},
+    {"UpperTorso",   "LeftUpperArm"},
+    {"LeftUpperArm", "LeftLowerArm"},
+    {"LeftLowerArm", "LeftHand"},
+    {"UpperTorso",   "RightUpperArm"},
+    {"RightUpperArm","RightLowerArm"},
+    {"RightLowerArm","RightHand"},
+    {"LowerTorso",   "LeftUpperLeg"},
+    {"LeftUpperLeg", "LeftLowerLeg"},
+    {"LeftLowerLeg", "LeftFoot"},
+    {"LowerTorso",   "RightUpperLeg"},
+    {"RightUpperLeg","RightLowerLeg"},
+    {"RightLowerLeg","RightFoot"},
+}
+
+-- Cor do skeleton
+local SKEL_COLOR = Color3.fromRGB(180, 80, 255)
+local JOINT_SIZE = 0.18
+local BONE_THICKNESS = 0.1
+
+local skeletonFolder = nil
+local boneObjects = {} -- { part = cylinder, joint1 = sphere, joint2 = sphere }
+local jointObjects = {}
+
+local function clearSkeleton()
+    if skeletonFolder then
+        skeletonFolder:Destroy()
+        skeletonFolder = nil
+    end
+    boneObjects = {}
+    jointObjects = {}
+end
+
+local function makeCylinder(parent)
+    local p = Instance.new("Part")
+    p.Shape = Enum.PartType.Cylinder
+    p.Material = Enum.Material.SmoothPlastic
+    p.Color = SKEL_COLOR
+    p.Anchored = true
+    p.CanCollide = false
+    p.CanTouch = false
+    p.CanQuery = false
+    p.CastShadow = false
+    p.Transparency = 0.15
+    p.Size = Vector3.new(1, BONE_THICKNESS, BONE_THICKNESS)
+    p.Parent = parent
+    return p
+end
+
+local function makeSphere(parent)
+    local p = Instance.new("Part")
+    p.Shape = Enum.PartType.Ball
+    p.Material = Enum.Material.SmoothPlastic
+    p.Color = SKEL_COLOR
+    p.Anchored = true
+    p.CanCollide = false
+    p.CanTouch = false
+    p.CanQuery = false
+    p.CastShadow = false
+    p.Transparency = 0.1
+    p.Size = Vector3.new(JOINT_SIZE, JOINT_SIZE, JOINT_SIZE)
+    p.Parent = parent
+    return p
+end
+
+local function buildSkeleton()
+    clearSkeleton()
+
+    local char = lp.Character
+    if not char then return end
+
+    skeletonFolder = Instance.new("Folder")
+    skeletonFolder.Name = "AlbuxSkeleton"
+    skeletonFolder.Parent = workspace
+
+    -- Criar ossos (cilindros) e juntas (esferas)
+    for _, pair in ipairs(BONE_PAIRS) do
+        local p1Name, p2Name = pair[1], pair[2]
+        local part1 = char:FindFirstChild(p1Name)
+        local part2 = char:FindFirstChild(p2Name)
+
+        if part1 and part2 then
+            local bone = makeCylinder(skeletonFolder)
+            local joint1 = makeSphere(skeletonFolder)
+            local joint2 = makeSphere(skeletonFolder)
+
+            table.insert(boneObjects, {
+                bone = bone,
+                joint1 = joint1,
+                joint2 = joint2,
+                p1Name = p1Name,
+                p2Name = p2Name
+            })
+        end
+    end
+end
+
+local function positionBone(bone, from, to)
+    local dist = (to - from).Magnitude
+    if dist < 0.01 then return end
+    bone.Size = Vector3.new(dist, BONE_THICKNESS, BONE_THICKNESS)
+    bone.CFrame = CFrame.lookAt(from, to) * CFrame.new(0, 0, -dist / 2) * CFrame.Angles(0, math.pi / 2, 0)
+end
+
+local function updateSkeleton()
+    if not skeletonFolder then return end
+
+    local char = lp.Character
+    if not char or not lastSafeCFrame then return end
+
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    for _, entry in ipairs(boneObjects) do
+        local part1 = char:FindFirstChild(entry.p1Name)
+        local part2 = char:FindFirstChild(entry.p2Name)
+
+        if part1 and part2 then
+            -- Calcular posição relativa ao HRP salvo
+            local rel1 = hrp.CFrame:ToObjectSpace(part1.CFrame)
+            local rel2 = hrp.CFrame:ToObjectSpace(part2.CFrame)
+
+            local world1 = (lastSafeCFrame * rel1).Position
+            local world2 = (lastSafeCFrame * rel2).Position
+
+            -- Posicionar osso
+            positionBone(entry.bone, world1, world2)
+
+            -- Posicionar juntas
+            entry.joint1.CFrame = CFrame.new(world1)
+            entry.joint2.CFrame = CFrame.new(world2)
+
+            entry.bone.Transparency = 0.15
+            entry.joint1.Transparency = 0.1
+            entry.joint2.Transparency = 0.1
+        end
+    end
+end
+
+local function hideSkeleton()
+    for _, entry in ipairs(boneObjects) do
+        entry.bone.Transparency = 1
+        entry.joint1.Transparency = 1
+        entry.joint2.Transparency = 1
+    end
+end
+
+lp.CharacterAdded:Connect(function()
+    task.wait(1)
+    clearSkeleton()
+end)
+
+--// UI
 local gui = Instance.new("ScreenGui")
 gui.Name = "AlbuxDesyncUI"
 gui.ResetOnSpawn = false
 gui.Parent = (gethui and gethui()) or game.CoreGui
 
--- Main Frame
 local main = Instance.new("Frame")
 main.Parent = gui
-main.Size = UDim2.new(0, 220, 0, 85)
-main.Position = UDim2.new(0.5, -110, 0.08, 0)
-main.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+main.Size = UDim2.new(0, 270, 0, 158)
+main.Position = loadUIPosition()
+main.BackgroundColor3 = Color3.fromRGB(15, 10, 25)
 main.BorderSizePixel = 0
+main.ClipsDescendants = true
 
 local mainCorner = Instance.new("UICorner")
 mainCorner.Parent = main
-mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.CornerRadius = UDim.new(0, 14)
 
--- Border Stroke
-local stroke = Instance.new("UIStroke")
-stroke.Parent = main
-stroke.Color = Color3.fromRGB(80, 140, 255)
-stroke.Thickness = 1.5
-stroke.Transparency = 0.4
+local borderGlow = Instance.new("UIStroke")
+borderGlow.Parent = main
+borderGlow.Color = Color3.fromRGB(138, 43, 226)
+borderGlow.Thickness = 1.8
 
--- Gradient Background
-local gradient = Instance.new("UIGradient")
-gradient.Parent = main
-gradient.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(25, 25, 30)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(15, 15, 20))
+task.spawn(function()
+    while true do
+        TweenService:Create(borderGlow, TweenInfo.new(2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+            Color = Color3.fromRGB(186, 85, 211),
+            Transparency = 0.3
+        }):Play()
+        task.wait(2)
+    end
+end)
+
+local topBar = Instance.new("Frame")
+topBar.Parent = main
+topBar.Size = UDim2.new(1, 0, 0, 30)
+topBar.BackgroundColor3 = Color3.fromRGB(138, 43, 226)
+topBar.BorderSizePixel = 0
+
+local topCorner = Instance.new("UICorner")
+topCorner.Parent = topBar
+topCorner.CornerRadius = UDim.new(0, 14)
+
+local topFix = Instance.new("Frame")
+topFix.Parent = topBar
+topFix.Size = UDim2.new(1, 0, 0.5, 0)
+topFix.Position = UDim2.new(0, 0, 0.5, 0)
+topFix.BackgroundColor3 = Color3.fromRGB(138, 43, 226)
+topFix.BorderSizePixel = 0
+
+local topGradient = Instance.new("UIGradient")
+topGradient.Parent = topBar
+topGradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(138, 43, 226)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(186, 85, 211))
 }
-gradient.Rotation = 135
 
--- Header
-local header = Instance.new("Frame")
-header.Parent = main
-header.Size = UDim2.new(1, 0, 0, 28)
-header.BackgroundColor3 = Color3.fromRGB(80, 140, 255)
-header.BorderSizePixel = 0
-
-local headerCorner = Instance.new("UICorner")
-headerCorner.Parent = header
-headerCorner.CornerRadius = UDim.new(0, 10)
-
-local headerFix = Instance.new("Frame")
-headerFix.Parent = header
-headerFix.Size = UDim2.new(1, 0, 0.5, 0)
-headerFix.Position = UDim2.new(0, 0, 0.5, 0)
-headerFix.BackgroundColor3 = Color3.fromRGB(80, 140, 255)
-headerFix.BorderSizePixel = 0
-
--- Title
 local title = Instance.new("TextLabel")
-title.Parent = header
+title.Parent = topBar
 title.Size = UDim2.new(1, -50, 1, 0)
-title.Position = UDim2.new(0, 12, 0, 0)
+title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
 title.Font = Enum.Font.GothamBold
-title.Text = "ALBUX DESYNC"
+title.Text = "👑 ALBUX DESYNC"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.TextSize = 13
 title.TextXAlignment = Enum.TextXAlignment.Left
 
--- Version Badge
-local versionBadge = Instance.new("Frame")
-versionBadge.Parent = header
-versionBadge.Size = UDim2.new(0, 35, 0, 18)
-versionBadge.Position = UDim2.new(1, -42, 0.5, -9)
-versionBadge.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-versionBadge.BorderSizePixel = 0
+local vBadge = Instance.new("TextLabel")
+vBadge.Parent = topBar
+vBadge.Size = UDim2.new(0, 28, 0, 17)
+vBadge.Position = UDim2.new(1, -34, 0.5, -8)
+vBadge.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+vBadge.Font = Enum.Font.GothamBold
+vBadge.Text = "V4"
+vBadge.TextColor3 = Color3.fromRGB(138, 43, 226)
+vBadge.TextSize = 9
+vBadge.BorderSizePixel = 0
 
-local versionCorner = Instance.new("UICorner")
-versionCorner.Parent = versionBadge
-versionCorner.CornerRadius = UDim.new(0, 4)
+local vCorner = Instance.new("UICorner")
+vCorner.Parent = vBadge
+vCorner.CornerRadius = UDim.new(0, 4)
 
-local versionText = Instance.new("TextLabel")
-versionText.Parent = versionBadge
-versionText.Size = UDim2.new(1, 0, 1, 0)
-versionText.BackgroundTransparency = 1
-versionText.Font = Enum.Font.GothamBold
-versionText.Text = "V4"
-versionText.TextColor3 = Color3.fromRGB(80, 140, 255)
-versionText.TextSize = 11
+local statusContainer = Instance.new("Frame")
+statusContainer.Parent = main
+statusContainer.Size = UDim2.new(1, -18, 0, 44)
+statusContainer.Position = UDim2.new(0, 9, 0, 38)
+statusContainer.BackgroundColor3 = Color3.fromRGB(20, 15, 30)
+statusContainer.BorderSizePixel = 0
 
--- Status Dot
+local statusCorner = Instance.new("UICorner")
+statusCorner.Parent = statusContainer
+statusCorner.CornerRadius = UDim.new(0, 8)
+
+local statusStroke = Instance.new("UIStroke")
+statusStroke.Parent = statusContainer
+statusStroke.Color = Color3.fromRGB(138, 43, 226)
+statusStroke.Thickness = 1
+statusStroke.Transparency = 0.6
+
 local statusDot = Instance.new("Frame")
-statusDot.Parent = main
-statusDot.Size = UDim2.new(0, 8, 0, 8)
-statusDot.Position = UDim2.new(0, 12, 0, 40)
-statusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+statusDot.Parent = statusContainer
+statusDot.Size = UDim2.new(0, 9, 0, 9)
+statusDot.Position = UDim2.new(0, 11, 0, 11)
+statusDot.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
 statusDot.BorderSizePixel = 0
 
 local dotCorner = Instance.new("UICorner")
 dotCorner.Parent = statusDot
 dotCorner.CornerRadius = UDim.new(1, 0)
 
--- Status Text
 local statusText = Instance.new("TextLabel")
-statusText.Parent = main
+statusText.Parent = statusContainer
 statusText.Size = UDim2.new(1, -30, 0, 20)
-statusText.Position = UDim2.new(0, 26, 0, 36)
+statusText.Position = UDim2.new(0, 26, 0, 4)
 statusText.BackgroundTransparency = 1
 statusText.Font = Enum.Font.GothamBold
-statusText.Text = "INACTIVE"
+statusText.Text = "DESYNC: INACTIVE"
 statusText.TextColor3 = Color3.fromRGB(255, 255, 255)
-statusText.TextSize = 13
+statusText.TextSize = 12
 statusText.TextXAlignment = Enum.TextXAlignment.Left
 
--- Mode Label
-local modeLabel = Instance.new("TextLabel")
-modeLabel.Parent = main
-modeLabel.Size = UDim2.new(1, -24, 0, 16)
-modeLabel.Position = UDim2.new(0, 12, 0, 60)
-modeLabel.BackgroundTransparency = 1
-modeLabel.Font = Enum.Font.Gotham
-modeLabel.Text = "STEAL ONLY"
-modeLabel.TextColor3 = Color3.fromRGB(140, 140, 150)
-modeLabel.TextSize = 10
-modeLabel.TextXAlignment = Enum.TextXAlignment.Left
+local modeText = Instance.new("TextLabel")
+modeText.Parent = statusContainer
+modeText.Size = UDim2.new(1, -30, 0, 16)
+modeText.Position = UDim2.new(0, 26, 0, 24)
+modeText.BackgroundTransparency = 1
+modeText.Font = Enum.Font.Gotham
+modeText.Text = "STEAL ONLY MODE"
+modeText.TextColor3 = Color3.fromRGB(186, 85, 211)
+modeText.TextSize = 10
+modeText.TextXAlignment = Enum.TextXAlignment.Left
 
--- Accent Line
-local accentLine = Instance.new("Frame")
-accentLine.Parent = main
-accentLine.Size = UDim2.new(0, 3, 0, 18)
-accentLine.Position = UDim2.new(0, 0, 0, 36)
-accentLine.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
-accentLine.BorderSizePixel = 0
+local saveBtn = Instance.new("TextButton")
+saveBtn.Parent = main
+saveBtn.Size = UDim2.new(1, -18, 0, 26)
+saveBtn.Position = UDim2.new(0, 9, 0, 90)
+saveBtn.BackgroundColor3 = Color3.fromRGB(138, 43, 226)
+saveBtn.Font = Enum.Font.GothamBold
+saveBtn.Text = "💾  SAVE POSITION"
+saveBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+saveBtn.TextSize = 11
+saveBtn.BorderSizePixel = 0
+saveBtn.AutoButtonColor = false
 
-local lineCorner = Instance.new("UICorner")
-lineCorner.Parent = accentLine
-lineCorner.CornerRadius = UDim.new(0, 2)
+local btnCorner = Instance.new("UICorner")
+btnCorner.Parent = saveBtn
+btnCorner.CornerRadius = UDim.new(0, 7)
 
--- Shadow
+local btnGradient = Instance.new("UIGradient")
+btnGradient.Parent = saveBtn
+btnGradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(138, 43, 226)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(186, 85, 211))
+}
+
+saveBtn.MouseEnter:Connect(function()
+    TweenService:Create(saveBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(186, 85, 211)}):Play()
+end)
+saveBtn.MouseLeave:Connect(function()
+    TweenService:Create(saveBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(138, 43, 226)}):Play()
+end)
+
+saveBtn.MouseButton1Click:Connect(function()
+    local char = lp.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        State.savedPosition = char.HumanoidRootPart.CFrame
+        TweenService:Create(saveBtn, TweenInfo.new(0.1), {Size = UDim2.new(1, -20, 0, 24)}):Play()
+        task.wait(0.1)
+        TweenService:Create(saveBtn, TweenInfo.new(0.1), {Size = UDim2.new(1, -18, 0, 26)}):Play()
+        saveBtn.Text = "✅  SAVED!"
+        task.wait(1.5)
+        saveBtn.Text = "💾  SAVE POSITION"
+    end
+end)
+
+local discordContainer = Instance.new("Frame")
+discordContainer.Parent = main
+discordContainer.Size = UDim2.new(1, -18, 0, 30)
+discordContainer.Position = UDim2.new(0, 9, 0, 121)
+discordContainer.BackgroundColor3 = Color3.fromRGB(138, 43, 226)
+discordContainer.BorderSizePixel = 0
+
+local discordContainerCorner = Instance.new("UICorner")
+discordContainerCorner.Parent = discordContainer
+discordContainerCorner.CornerRadius = UDim.new(0, 8)
+
+local discordGradient = Instance.new("UIGradient")
+discordGradient.Parent = discordContainer
+discordGradient.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(138, 43, 226)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(186, 85, 211))
+}
+discordGradient.Rotation = 45
+
+local discordIcon = Instance.new("TextLabel")
+discordIcon.Parent = discordContainer
+discordIcon.Size = UDim2.new(0, 26, 1, 0)
+discordIcon.Position = UDim2.new(0, 4, 0, 0)
+discordIcon.BackgroundTransparency = 1
+discordIcon.Font = Enum.Font.GothamBold
+discordIcon.Text = "💜"
+discordIcon.TextColor3 = Color3.fromRGB(255, 255, 255)
+discordIcon.TextSize = 16
+
+local discordLabel = Instance.new("TextLabel")
+discordLabel.Parent = discordContainer
+discordLabel.Size = UDim2.new(1, -34, 1, 0)
+discordLabel.Position = UDim2.new(0, 30, 0, 0)
+discordLabel.BackgroundTransparency = 1
+discordLabel.Font = Enum.Font.GothamBold
+discordLabel.Text = "discord.gg/albuxhub"
+discordLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+discordLabel.TextSize = 12
+discordLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local discordGlow = Instance.new("UIStroke")
+discordGlow.Parent = discordContainer
+discordGlow.Color = Color3.fromRGB(255, 255, 255)
+discordGlow.Thickness = 1.2
+discordGlow.Transparency = 0.5
+
+task.spawn(function()
+    while true do
+        TweenService:Create(discordGlow, TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+            Transparency = 0.1
+        }):Play()
+        task.wait(1.5)
+    end
+end)
+
+local discordBtn = Instance.new("TextButton")
+discordBtn.Parent = discordContainer
+discordBtn.Size = UDim2.new(1, 0, 1, 0)
+discordBtn.BackgroundTransparency = 1
+discordBtn.Text = ""
+discordBtn.ZIndex = 10
+
+discordBtn.MouseButton1Click:Connect(function()
+    if setclipboard then
+        setclipboard("discord.gg/albuxhub")
+        discordLabel.Text = "✅ COPIED!"
+        task.wait(2)
+        discordLabel.Text = "discord.gg/albuxhub"
+    end
+end)
+
+discordBtn.MouseEnter:Connect(function()
+    TweenService:Create(discordContainer, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(186, 85, 211)}):Play()
+end)
+discordBtn.MouseLeave:Connect(function()
+    TweenService:Create(discordContainer, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(138, 43, 226)}):Play()
+end)
+
+local particles = Instance.new("Frame")
+particles.Parent = main
+particles.Size = UDim2.new(1, 0, 1, 0)
+particles.BackgroundTransparency = 1
+particles.ZIndex = 0
+
+for i = 1, 5 do
+    local particle = Instance.new("Frame")
+    particle.Parent = particles
+    particle.Size = UDim2.new(0, math.random(2, 3), 0, math.random(2, 3))
+    particle.Position = UDim2.new(math.random(), 0, math.random(), 0)
+    particle.BackgroundColor3 = Color3.fromRGB(186, 85, 211)
+    particle.BorderSizePixel = 0
+    particle.BackgroundTransparency = 0.7
+    local pCorner = Instance.new("UICorner")
+    pCorner.Parent = particle
+    pCorner.CornerRadius = UDim.new(1, 0)
+    task.spawn(function()
+        while true do
+            TweenService:Create(particle, TweenInfo.new(math.random(3, 6), Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                Position = UDim2.new(math.random(), 0, math.random(), 0),
+                BackgroundTransparency = math.random(50, 90) / 100
+            }):Play()
+            task.wait(math.random(3, 6))
+        end
+    end)
+end
+
 local shadow = Instance.new("ImageLabel")
 shadow.Parent = main
 shadow.BackgroundTransparency = 1
 shadow.AnchorPoint = Vector2.new(0.5, 0.5)
-shadow.Position = UDim2.new(0.5, 0, 0.5, 4)
-shadow.Size = UDim2.new(1, 30, 1, 30)
+shadow.Position = UDim2.new(0.5, 0, 0.5, 6)
+shadow.Size = UDim2.new(1, 40, 1, 40)
 shadow.Image = "rbxassetid://1316045217"
-shadow.ImageTransparency = 0.7
+shadow.ImageColor3 = Color3.fromRGB(138, 43, 226)
+shadow.ImageTransparency = 0.6
 shadow.ScaleType = Enum.ScaleType.Slice
 shadow.SliceCenter = Rect.new(10, 10, 118, 118)
-shadow.ZIndex = -1
+shadow.ZIndex = -2
 
--- Status Update Loop
+-- Status Loop
 task.spawn(function()
     while true do
         if State.stealing and State.desync then
-            TweenService:Create(statusText, TweenInfo.new(0.3), {TextColor3 = Color3.fromRGB(0, 255, 140)}):Play()
-            TweenService:Create(statusDot, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(0, 255, 140)}):Play()
-            TweenService:Create(accentLine, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(0, 255, 140)}):Play()
-            TweenService:Create(stroke, TweenInfo.new(0.3), {Color = Color3.fromRGB(0, 255, 140)}):Play()
-            TweenService:Create(header, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(0, 255, 140)}):Play()
-            TweenService:Create(headerFix, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(0, 255, 140)}):Play()
-            statusText.Text = "ACTIVE"
-            
-            -- Pulse animation
-            TweenService:Create(statusDot, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
-                Transparency = 0.4
+            TweenService:Create(statusText, TweenInfo.new(0.3), {TextColor3 = Color3.fromRGB(0, 255, 150)}):Play()
+            TweenService:Create(statusDot, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(0, 255, 150)}):Play()
+            statusText.Text = "DESYNC: ACTIVE ✓"
+            TweenService:Create(statusDot, TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+                Transparency = 0.3,
+                Size = UDim2.new(0, 11, 0, 11),
+                Position = UDim2.new(0, 10, 0, 10)
             }):Play()
         else
             TweenService:Create(statusText, TweenInfo.new(0.3), {TextColor3 = Color3.fromRGB(255, 255, 255)}):Play()
-            TweenService:Create(statusDot, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(255, 70, 70)}):Play()
-            TweenService:Create(accentLine, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(255, 70, 70)}):Play()
-            TweenService:Create(stroke, TweenInfo.new(0.3), {Color = Color3.fromRGB(80, 140, 255)}):Play()
-            TweenService:Create(header, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(80, 140, 255)}):Play()
-            TweenService:Create(headerFix, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(80, 140, 255)}):Play()
-            statusText.Text = "INACTIVE"
-            statusDot.Transparency = 0
+            TweenService:Create(statusDot, TweenInfo.new(0.3), {
+                BackgroundColor3 = Color3.fromRGB(255, 60, 60),
+                Transparency = 0,
+                Size = UDim2.new(0, 9, 0, 9),
+                Position = UDim2.new(0, 11, 0, 11)
+            }):Play()
+            statusText.Text = "DESYNC: INACTIVE"
         end
         task.wait(0.5)
     end
 end)
 
---// DRAG SYSTEM
+--// DRAG
 local dragging, dragStart, startPos
 
 main.InputBegan:Connect(function(input)
@@ -333,6 +655,7 @@ main.InputBegan:Connect(function(input)
         dragging = true
         dragStart = input.Position
         startPos = main.Position
+        TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 267, 0, 156)}):Play()
     end
 end)
 
@@ -346,34 +669,27 @@ end)
 UIS.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
+        TweenService:Create(main, TweenInfo.new(0.15), {Size = UDim2.new(0, 270, 0, 158)}):Play()
+        saveUIPosition(main.Position)
     end
 end)
 
---// ROLLBACK BALL
-local rollbackBall = Instance.new("Part")
-rollbackBall.Name = "AlbuxRollbackPosition"
-rollbackBall.Shape = Enum.PartType.Ball
-rollbackBall.Material = Enum.Material.Neon
-rollbackBall.Size = Vector3.new(1.8, 1.8, 1.8)
-rollbackBall.Color = Color3.fromRGB(255, 0, 0)
-rollbackBall.Anchored = true
-rollbackBall.CanCollide = false
-rollbackBall.Transparency = 1
-rollbackBall.Parent = workspace
-
-local hl = Instance.new("Highlight")
-hl.FillColor = Color3.fromRGB(255, 0, 0)
-hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-hl.Parent = rollbackBall
-
+--// RENDER LOOP - SKELETON
 RunService.RenderStepped:Connect(function()
     if lastSafePos and State.stealing and State.desync then
-        rollbackBall.Position = lastSafePos
-        rollbackBall.Transparency = 0.5
+        local char = lp.Character
+        if not char then return end
+
+        if not skeletonFolder or not skeletonFolder.Parent then
+            buildSkeleton()
+        end
+
+        updateSkeleton()
     else
-        rollbackBall.Transparency = 1
+        if skeletonFolder and skeletonFolder.Parent then
+            hideSkeleton()
+        end
     end
 end)
 
-print("[ALBUX DESYNC V4] Loaded - Compact UI Active")
+print("[ALBUX DESYNC V4] 💜 Loaded - Skeleton Mode Active")
