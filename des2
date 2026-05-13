@@ -89,28 +89,39 @@ local State = {
 }
 
 local lastSafePos = nil
-local statusText, statusDot, keybindLabel
+local statusText, statusDot, keybindBadge, keybindStroke
 
 --// CONFIG
 local configFolder = "AlbuxDesync"
-local configFile = configFolder .. "/ui_position.json"
+local configFile = configFolder .. "/config.json"
 
 if not isfolder(configFolder) then makefolder(configFolder) end
 
-local function saveUIPosition(position)
-    writefile(configFile, HttpService:JSONEncode({
-        X = position.X.Scale, XOffset = position.X.Offset,
-        Y = position.Y.Scale, YOffset = position.Y.Offset
-    }))
-end
-
-local function loadUIPosition()
+-- Carrega config ANTES de criar a UI
+local function loadConfig()
     if isfile(configFile) then
-        local success, data = pcall(function() return HttpService:JSONDecode(readfile(configFile)) end)
-        if success and data then return UDim2.new(data.X, data.XOffset, data.Y, data.YOffset) end
+        local success, data = pcall(function()
+            return HttpService:JSONDecode(readfile(configFile))
+        end)
+        if success and data then
+            if data.Keybind then
+                local ok, kc = pcall(function()
+                    return Enum.KeyCode[data.Keybind]
+                end)
+                if ok and kc then
+                    State.keybind = kc
+                end
+            end
+            return UDim2.new(
+                data.X or 0.5, data.XOffset or -135,
+                data.Y or 0.3, data.YOffset or 0
+            )
+        end
     end
     return UDim2.new(0.5, -135, 0.3, 0)
 end
+
+local savedPos = loadConfig()
 
 --// DESYNC HOOKS
 local function send_hook(packet)
@@ -159,10 +170,21 @@ local main = Instance.new("Frame")
 main.Parent = gui
 main.BackgroundColor3 = Color3.fromRGB(13, 8, 22)
 main.BorderSizePixel = 0
-main.Position = loadUIPosition()
+main.Position = savedPos
 main.Size = UDim2.new(0, 270, 0, 370)
 main.ClipsDescendants = true
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 16)
+
+-- saveConfig definida DEPOIS de main existir
+local function saveConfig()
+    writefile(configFile, HttpService:JSONEncode({
+        X = main.Position.X.Scale,
+        XOffset = main.Position.X.Offset,
+        Y = main.Position.Y.Scale,
+        YOffset = main.Position.Y.Offset,
+        Keybind = State.keybind.Name
+    }))
+end
 
 -- Animated border
 local mainStroke = Instance.new("UIStroke", main)
@@ -178,7 +200,6 @@ task.spawn(function()
     end
 end)
 
--- Background gradient
 local bgGrad = Instance.new("UIGradient", main)
 bgGrad.Color = ColorSequence.new{
     ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 12, 35)),
@@ -186,7 +207,6 @@ bgGrad.Color = ColorSequence.new{
 }
 bgGrad.Rotation = 145
 
--- Top accent line
 local accentLine = Instance.new("Frame", main)
 accentLine.Size = UDim2.new(1, 0, 0, 3)
 accentLine.Position = UDim2.new(0, 0, 0, 0)
@@ -210,7 +230,6 @@ task.spawn(function()
     end
 end)
 
--- Title
 local titleA = Instance.new("TextLabel", main)
 titleA.Size = UDim2.new(1, -100, 0, 36)
 titleA.Position = UDim2.new(0, 18, 0, 14)
@@ -241,7 +260,6 @@ titleB.TextSize = 11
 titleB.TextColor3 = Color3.fromRGB(150, 90, 240)
 titleB.TextXAlignment = Enum.TextXAlignment.Left
 
--- Version badge
 local vFrame = Instance.new("Frame", main)
 vFrame.Size = UDim2.new(0, 34, 0, 20)
 vFrame.Position = UDim2.new(1, -50, 0, 22)
@@ -257,14 +275,12 @@ vLabel.Font = Enum.Font.GothamBold
 vLabel.TextSize = 11
 vLabel.TextColor3 = Color3.fromRGB(220, 190, 255)
 
--- Divider
 local divider = Instance.new("Frame", main)
 divider.Size = UDim2.new(0.88, 0, 0, 1)
 divider.Position = UDim2.new(0.06, 0, 0, 72)
 divider.BackgroundColor3 = Color3.fromRGB(60, 30, 110)
 divider.BorderSizePixel = 0
 
--- Status Box
 local statusBox = Instance.new("Frame", main)
 statusBox.Size = UDim2.new(0.88, 0, 0, 58)
 statusBox.Position = UDim2.new(0.06, 0, 0, 84)
@@ -313,7 +329,6 @@ statusText.TextSize = 20
 statusText.BackgroundTransparency = 1
 statusText.TextXAlignment = Enum.TextXAlignment.Left
 
--- Button factory
 local function makeBtn(text, yPos, w, xPos, textColor)
     local btn = Instance.new("TextButton", main)
     btn.Size = w or UDim2.new(0.88, 0, 0, 40)
@@ -343,7 +358,6 @@ local function makeBtn(text, yPos, w, xPos, textColor)
     return btn, stroke
 end
 
--- MANUAL ROLLBACK (menor, deixa espaço pro keybind badge)
 local manualBtn, _ = makeBtn(
     "MANUAL ROLLBACK",
     158,
@@ -351,12 +365,10 @@ local manualBtn, _ = makeBtn(
     UDim2.new(0, 16, 0, 158)
 )
 
--- KEYBIND BADGE (quadradinho ao lado do manual rollback)
-local keybindBadge = Instance.new("TextButton", main)
+keybindBadge = Instance.new("TextButton", main)
 keybindBadge.Size = UDim2.new(0, 46, 0, 40)
 keybindBadge.Position = UDim2.new(0, 206, 0, 158)
 keybindBadge.BackgroundColor3 = Color3.fromRGB(80, 30, 160)
-keybindBadge.Text = "R"
 keybindBadge.TextColor3 = Color3.fromRGB(230, 200, 255)
 keybindBadge.Font = Enum.Font.GothamBlack
 keybindBadge.TextSize = 16
@@ -364,7 +376,10 @@ keybindBadge.BorderSizePixel = 0
 keybindBadge.AutoButtonColor = false
 Instance.new("UICorner", keybindBadge).CornerRadius = UDim.new(0, 10)
 
-local keybindStroke = Instance.new("UIStroke", keybindBadge)
+local loadedKeyName = State.keybind.Name
+keybindBadge.Text = #loadedKeyName > 3 and loadedKeyName:sub(1, 3) or loadedKeyName
+
+keybindStroke = Instance.new("UIStroke", keybindBadge)
 keybindStroke.Color = Color3.fromRGB(160, 80, 255)
 keybindStroke.Transparency = 0.2
 keybindStroke.Thickness = 1.5
@@ -389,7 +404,6 @@ end)
 local desyncToggleBtn, desyncStroke = makeBtn("DESYNC  —  ON", 207, nil, nil, Color3.fromRGB(150, 255, 180))
 local saveBtn, _ = makeBtn("SAVE POSITION", 256)
 
--- Discord bar
 local discordBar = Instance.new("Frame", main)
 discordBar.Size = UDim2.new(0.88, 0, 0, 36)
 discordBar.Position = UDim2.new(0.06, 0, 0, 313)
@@ -445,7 +459,6 @@ discordClickBtn.MouseLeave:Connect(function()
     TweenService:Create(discordBarStroke, TweenInfo.new(0.18), {Transparency = 0.55}):Play()
 end)
 
--- Shadow
 local shadow = Instance.new("ImageLabel", main)
 shadow.BackgroundTransparency = 1
 shadow.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -526,26 +539,33 @@ end)
 
 --// KEYBIND LISTENER
 UIS.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-
     if State.listeningForKey then
         if input.UserInputType == Enum.UserInputType.Keyboard then
+            if input.KeyCode == Enum.KeyCode.Escape then
+                State.listeningForKey = false
+                local kn = State.keybind.Name
+                keybindBadge.Text = #kn > 3 and kn:sub(1, 3) or kn
+                TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(80, 30, 160)}):Play()
+                TweenService:Create(keybindStroke, TweenInfo.new(0.18), {Color = Color3.fromRGB(160, 80, 255)}):Play()
+                return
+            end
+
             State.keybind = input.KeyCode
             State.listeningForKey = false
 
-            -- Mostra nome curto da key
             local keyName = input.KeyCode.Name
-            keybindBadge.Text = #keyName > 3 and keyName:sub(1,2) or keyName
+            keybindBadge.Text = #keyName > 3 and keyName:sub(1, 3) or keyName
 
             TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(80, 30, 160)}):Play()
             TweenService:Create(keybindStroke, TweenInfo.new(0.18), {Color = Color3.fromRGB(160, 80, 255)}):Play()
+
+            saveConfig()
         end
         return
     end
 
-    if input.KeyCode == State.keybind then
-        doRollback()
-    end
+    if gpe then return end
+    if input.KeyCode == State.keybind then doRollback() end
 end)
 
 manualBtn.MouseButton1Click:Connect(doRollback)
@@ -595,7 +615,7 @@ end)
 UIS.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
-        saveUIPosition(main.Position)
+        saveConfig()
     end
 end)
 
