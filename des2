@@ -1,0 +1,599 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+  local HWIDs_Autorizados = {
+    "e25d0b1c22d02c4b8602eb75c9b3780d6aec7cf6309e206a908db7b7ed8a7b97",
+    "e8c655423b756ddd56687026077f3c8b7fa76e3af6a24d77522b52c539216d33",
+    "e7acbca7f86916bd22825feb20ea88ca6bd5cdf168747a1d3238fbbd98bbdd07",
+    "0aacdafe4fd20c70647f7efc9ff865905691d8258a1bb65d0ebc3091c1eba4c6",
+    "950ba22b27397008051ee19e385254d912812cbb1c4b77dd23b319f4454113a2",
+    "c09622852499faefa5a5f93d42e8aafb79df8430136f826c0d051c07c2dc881f",
+    "2c6aff28d064dc884a95722fc6a34f251dcccd1b186b45e5da1bf10d25327f9e",
+    "e383bd403c3fca227a17d39efab6f46c05a4c373510e9030f200b0f90af37fa5",
+    "5bfdc05d623ea2363cdcadea31a1da47c3534631a7eddafdbbc5115a3b46cdc0",
+    "4a77db7556f7e12ac20efdd2356d9b43aa745e4c8fea7169aca3918f87e2a178",
+    "8f20926e103e523fb1a45e520a549af3097e8bfedc3e5c31c341ec2acbe4793d",
+    "d158fda72439f2dac690c9d7e2bf630220a8657b38c78ac780426d1415c3d4c4",
+    "6c9c2d457b8d5f9f8471557352d198d82d33bd6f9e0caa38bb226f11f8f29e4e",
+    "b235638245f3b989b5b10418fdb37efed8f209cf7ae9690b0b11e0b894f9364d",
+    "45fad442584889bde8ed20c10ef9d6f5ad93e16a7f395aaddd6e4e077fa1abda",
+    "54fc15addaa50e377bfe43a7e174e27dee1c047c3d35d091bda88f0a3007803c",
+    "978555bd780406054316fe48ab29e68e4b263e51ef58607d379a94b51678a034",
+    "8739c85f92feaadc9fa0376a5933e01125ba17bdd93c1f850be8b132d2bad828",
+    "0d1ad2dc081271cbb0d216d09089b05aa8be71b06532850a7b4622ad5a5a050c",
+    "a6765c82e8c7a1bcfae27d57b714b7c001778f1ed1af98d99f7085cad9acc446",
+    "a",
+}
+
+local hwid_atual = gethwid()
+local autorizado = false
+
+-- Verifica o HWID
+for _, hwid in pairs(HWIDs_Autorizados) do
+    if hwid_atual == hwid then
+        autorizado = true
+        break
+    end
+end
+
+-- Se não autorizado
+if not autorizado then
+    -- Notificação
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "⚠️ Acesso Negado";
+        Text = "HWID não autorizado!";
+        Duration = 5;
+    })
+    
+    -- Aguarda 2 segundos e kicka
+    wait(2)
+    game.Players.LocalPlayer:Kick("❌ ACESSO NEGADO\n\nSeu HWID não está na whitelist!\n\nHWID: " .. hwid_atual .. "\n\nContate o administrador.")
+    return
+end
+
+-- Notificação de sucesso
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "✓ Acesso Autorizado";
+    Text = "Script carregado!";
+    Duration = 3;
+})
+
+print("Script iniciado com sucesso!")
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
+
+local lp = Players.LocalPlayer
+if not lp then
+    Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    lp = Players.LocalPlayer
+end
+
+if not raknet then
+    print("Raknet not found!")
+    return
+end
+
+local State = {
+    desync = false,
+    stealing = false,
+    timer = 5,
+    desyncEnabled = true,
+    keybind = Enum.KeyCode.R,
+    listeningForKey = false
+}
+
+local lastSafePos = nil
+local statusText, statusDot, keybindLabel
+
+--// CONFIG
+local configFolder = "AlbuxDesync"
+local configFile = configFolder .. "/ui_position.json"
+
+if not isfolder(configFolder) then makefolder(configFolder) end
+
+local function saveUIPosition(position)
+    writefile(configFile, HttpService:JSONEncode({
+        X = position.X.Scale, XOffset = position.X.Offset,
+        Y = position.Y.Scale, YOffset = position.Y.Offset
+    }))
+end
+
+local function loadUIPosition()
+    if isfile(configFile) then
+        local success, data = pcall(function() return HttpService:JSONDecode(readfile(configFile)) end)
+        if success and data then return UDim2.new(data.X, data.XOffset, data.Y, data.YOffset) end
+    end
+    return UDim2.new(0.5, -135, 0.3, 0)
+end
+
+--// DESYNC HOOKS
+local function send_hook(packet)
+    if not State.stealing or not State.desync or not State.desyncEnabled then return end
+    if packet.PacketId == 0x1B then
+        local b = packet.AsBuffer
+        buffer.writeu32(b, 1, 0xFFFFFFFF)
+        buffer.writeu32(b, 5, 0xFFFFFFFF)
+        buffer.writeu32(b, 9, 0xFFFFFFFF)
+        packet:SetData(b)
+    end
+end
+
+local function recv_hook(packet)
+    if not State.stealing or not State.desync or not State.desyncEnabled then return end
+    if packet.PacketId == 0x1B or packet.PacketId == 0x86 then packet:Drop() end
+end
+
+pcall(function()
+    if raknet.add_send_hook then raknet.add_send_hook(send_hook) end
+    if raknet.add_recv_hook then raknet.add_recv_hook(recv_hook) end
+end)
+
+--// ROLLBACK
+local function doRollback()
+    if lastSafePos and lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
+        lp.Character.HumanoidRootPart.CFrame = CFrame.new(lastSafePos)
+        State.timer = 5
+        if statusText then
+            statusText.Text = string.format("%.1fs", State.timer)
+            statusText.TextColor3 = Color3.fromRGB(190, 120, 255)
+        end
+        if statusDot then
+            statusDot.BackgroundColor3 = Color3.fromRGB(190, 120, 255)
+        end
+    end
+end
+
+--// UI
+local gui = Instance.new("ScreenGui")
+gui.Name = "AlbuxDesyncUI"
+gui.ResetOnSpawn = false
+gui.Parent = (gethui and gethui()) or game.CoreGui
+
+local main = Instance.new("Frame")
+main.Parent = gui
+main.BackgroundColor3 = Color3.fromRGB(13, 8, 22)
+main.BorderSizePixel = 0
+main.Position = loadUIPosition()
+main.Size = UDim2.new(0, 270, 0, 370)
+main.ClipsDescendants = true
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 16)
+
+-- Animated border
+local mainStroke = Instance.new("UIStroke", main)
+mainStroke.Thickness = 1.5
+
+task.spawn(function()
+    local t = 0
+    while true do
+        t = t + 0.02
+        local hue = 0.75 + math.sin(t) * 0.06
+        mainStroke.Color = Color3.fromHSV(hue, 0.8, 1)
+        task.wait(0.04)
+    end
+end)
+
+-- Background gradient
+local bgGrad = Instance.new("UIGradient", main)
+bgGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 12, 35)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 6, 18))
+}
+bgGrad.Rotation = 145
+
+-- Top accent line
+local accentLine = Instance.new("Frame", main)
+accentLine.Size = UDim2.new(1, 0, 0, 3)
+accentLine.Position = UDim2.new(0, 0, 0, 0)
+accentLine.BackgroundColor3 = Color3.fromRGB(160, 80, 255)
+accentLine.BorderSizePixel = 0
+accentLine.ZIndex = 2
+
+local accentGrad = Instance.new("UIGradient", accentLine)
+accentGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(60, 0, 160)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(210, 110, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(60, 0, 160))
+}
+
+task.spawn(function()
+    local offset = 0
+    while true do
+        offset = (offset + 0.012) % 1
+        accentGrad.Offset = Vector2.new(offset, 0)
+        task.wait(0.03)
+    end
+end)
+
+-- Title
+local titleA = Instance.new("TextLabel", main)
+titleA.Size = UDim2.new(1, -100, 0, 36)
+titleA.Position = UDim2.new(0, 18, 0, 14)
+titleA.BackgroundTransparency = 1
+titleA.Text = "ALBUX"
+titleA.Font = Enum.Font.GothamBlack
+titleA.TextSize = 30
+titleA.TextXAlignment = Enum.TextXAlignment.Left
+
+task.spawn(function()
+    local hue = 0.74
+    local dir = 1
+    while true do
+        hue = hue + 0.004 * dir
+        if hue > 0.84 then dir = -1 elseif hue < 0.72 then dir = 1 end
+        titleA.TextColor3 = Color3.fromHSV(hue, 0.65, 1)
+        task.wait(0.04)
+    end
+end)
+
+local titleB = Instance.new("TextLabel", main)
+titleB.Size = UDim2.new(1, -100, 0, 16)
+titleB.Position = UDim2.new(0, 20, 0, 46)
+titleB.BackgroundTransparency = 1
+titleB.Text = "DESYNC MODULE"
+titleB.Font = Enum.Font.Gotham
+titleB.TextSize = 11
+titleB.TextColor3 = Color3.fromRGB(150, 90, 240)
+titleB.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Version badge
+local vFrame = Instance.new("Frame", main)
+vFrame.Size = UDim2.new(0, 34, 0, 20)
+vFrame.Position = UDim2.new(1, -50, 0, 22)
+vFrame.BackgroundColor3 = Color3.fromRGB(90, 40, 180)
+vFrame.BorderSizePixel = 0
+Instance.new("UICorner", vFrame).CornerRadius = UDim.new(0, 6)
+
+local vLabel = Instance.new("TextLabel", vFrame)
+vLabel.Size = UDim2.new(1, 0, 1, 0)
+vLabel.BackgroundTransparency = 1
+vLabel.Text = "V5"
+vLabel.Font = Enum.Font.GothamBold
+vLabel.TextSize = 11
+vLabel.TextColor3 = Color3.fromRGB(220, 190, 255)
+
+-- Divider
+local divider = Instance.new("Frame", main)
+divider.Size = UDim2.new(0.88, 0, 0, 1)
+divider.Position = UDim2.new(0.06, 0, 0, 72)
+divider.BackgroundColor3 = Color3.fromRGB(60, 30, 110)
+divider.BorderSizePixel = 0
+
+-- Status Box
+local statusBox = Instance.new("Frame", main)
+statusBox.Size = UDim2.new(0.88, 0, 0, 58)
+statusBox.Position = UDim2.new(0.06, 0, 0, 84)
+statusBox.BackgroundColor3 = Color3.fromRGB(20, 12, 35)
+statusBox.BorderSizePixel = 0
+Instance.new("UICorner", statusBox).CornerRadius = UDim.new(0, 10)
+
+local statusBoxStroke = Instance.new("UIStroke", statusBox)
+statusBoxStroke.Color = Color3.fromRGB(90, 45, 170)
+statusBoxStroke.Transparency = 0.5
+
+statusDot = Instance.new("Frame", statusBox)
+statusDot.Size = UDim2.new(0, 8, 0, 8)
+statusDot.Position = UDim2.new(0, 14, 0.5, -4)
+statusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+statusDot.BorderSizePixel = 0
+Instance.new("UICorner", statusDot).CornerRadius = UDim.new(1, 0)
+
+task.spawn(function()
+    while true do
+        TweenService:Create(statusDot, TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+            Size = UDim2.new(0, 10, 0, 10),
+            Position = UDim2.new(0, 13, 0.5, -5)
+        }):Play()
+        task.wait(0.9)
+    end
+end)
+
+local nextLabel = Instance.new("TextLabel", statusBox)
+nextLabel.Text = "NEXT ROLLBACK"
+nextLabel.Position = UDim2.new(0, 30, 0, 8)
+nextLabel.Size = UDim2.new(0, 180, 0, 14)
+nextLabel.TextColor3 = Color3.fromRGB(130, 75, 210)
+nextLabel.Font = Enum.Font.GothamBold
+nextLabel.TextSize = 9
+nextLabel.BackgroundTransparency = 1
+nextLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+statusText = Instance.new("TextLabel", statusBox)
+statusText.Text = "Waiting..."
+statusText.Position = UDim2.new(0, 30, 0, 22)
+statusText.Size = UDim2.new(0, 200, 0, 26)
+statusText.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusText.Font = Enum.Font.GothamBlack
+statusText.TextSize = 20
+statusText.BackgroundTransparency = 1
+statusText.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Button factory
+local function makeBtn(text, yPos, w, xPos, textColor)
+    local btn = Instance.new("TextButton", main)
+    btn.Size = w or UDim2.new(0.88, 0, 0, 40)
+    btn.Position = xPos or UDim2.new(0.06, 0, 0, yPos)
+    btn.BackgroundColor3 = Color3.fromRGB(22, 13, 40)
+    btn.Text = text
+    btn.TextColor3 = textColor or Color3.fromRGB(200, 160, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+
+    local stroke = Instance.new("UIStroke", btn)
+    stroke.Color = Color3.fromRGB(90, 45, 170)
+    stroke.Transparency = 0.55
+
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(42, 22, 75)}):Play()
+        TweenService:Create(stroke, TweenInfo.new(0.18), {Transparency = 0.1}):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(22, 13, 40)}):Play()
+        TweenService:Create(stroke, TweenInfo.new(0.18), {Transparency = 0.55}):Play()
+    end)
+
+    return btn, stroke
+end
+
+-- MANUAL ROLLBACK (menor, deixa espaço pro keybind badge)
+local manualBtn, _ = makeBtn(
+    "MANUAL ROLLBACK",
+    158,
+    UDim2.new(0, 182, 0, 40),
+    UDim2.new(0, 16, 0, 158)
+)
+
+-- KEYBIND BADGE (quadradinho ao lado do manual rollback)
+local keybindBadge = Instance.new("TextButton", main)
+keybindBadge.Size = UDim2.new(0, 46, 0, 40)
+keybindBadge.Position = UDim2.new(0, 206, 0, 158)
+keybindBadge.BackgroundColor3 = Color3.fromRGB(80, 30, 160)
+keybindBadge.Text = "R"
+keybindBadge.TextColor3 = Color3.fromRGB(230, 200, 255)
+keybindBadge.Font = Enum.Font.GothamBlack
+keybindBadge.TextSize = 16
+keybindBadge.BorderSizePixel = 0
+keybindBadge.AutoButtonColor = false
+Instance.new("UICorner", keybindBadge).CornerRadius = UDim.new(0, 10)
+
+local keybindStroke = Instance.new("UIStroke", keybindBadge)
+keybindStroke.Color = Color3.fromRGB(160, 80, 255)
+keybindStroke.Transparency = 0.2
+keybindStroke.Thickness = 1.5
+
+keybindBadge.MouseEnter:Connect(function()
+    TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(120, 50, 220)}):Play()
+end)
+keybindBadge.MouseLeave:Connect(function()
+    if not State.listeningForKey then
+        TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(80, 30, 160)}):Play()
+    end
+end)
+
+keybindBadge.MouseButton1Click:Connect(function()
+    if State.listeningForKey then return end
+    State.listeningForKey = true
+    keybindBadge.Text = "?"
+    TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(180, 100, 50)}):Play()
+    TweenService:Create(keybindStroke, TweenInfo.new(0.18), {Color = Color3.fromRGB(255, 160, 60)}):Play()
+end)
+
+local desyncToggleBtn, desyncStroke = makeBtn("DESYNC  —  ON", 207, nil, nil, Color3.fromRGB(150, 255, 180))
+local saveBtn, _ = makeBtn("SAVE POSITION", 256)
+
+-- Discord bar
+local discordBar = Instance.new("Frame", main)
+discordBar.Size = UDim2.new(0.88, 0, 0, 36)
+discordBar.Position = UDim2.new(0.06, 0, 0, 313)
+discordBar.BackgroundColor3 = Color3.fromRGB(20, 11, 38)
+discordBar.BorderSizePixel = 0
+Instance.new("UICorner", discordBar).CornerRadius = UDim.new(0, 10)
+
+local discordBarStroke = Instance.new("UIStroke", discordBar)
+discordBarStroke.Color = Color3.fromRGB(90, 45, 170)
+discordBarStroke.Transparency = 0.55
+
+local discordText = Instance.new("TextLabel", discordBar)
+discordText.Size = UDim2.new(1, -20, 1, 0)
+discordText.Position = UDim2.new(0, 14, 0, 0)
+discordText.BackgroundTransparency = 1
+discordText.Text = "discord.gg/albuxhub"
+discordText.Font = Enum.Font.GothamBold
+discordText.TextSize = 13
+discordText.TextXAlignment = Enum.TextXAlignment.Left
+
+task.spawn(function()
+    local hue = 0.74
+    local dir = 1
+    while true do
+        hue = hue + 0.005 * dir
+        if hue > 0.84 then dir = -1 elseif hue < 0.72 then dir = 1 end
+        discordText.TextColor3 = Color3.fromHSV(hue, 0.5, 1)
+        task.wait(0.05)
+    end
+end)
+
+local discordClickBtn = Instance.new("TextButton", discordBar)
+discordClickBtn.Size = UDim2.new(1, 0, 1, 0)
+discordClickBtn.BackgroundTransparency = 1
+discordClickBtn.Text = ""
+discordClickBtn.ZIndex = 10
+
+discordClickBtn.MouseButton1Click:Connect(function()
+    if setclipboard then
+        setclipboard("discord.gg/albuxhub")
+        discordText.Text = "Copied!"
+        task.wait(1.5)
+        discordText.Text = "discord.gg/albuxhub"
+    end
+end)
+
+discordClickBtn.MouseEnter:Connect(function()
+    TweenService:Create(discordBar, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(38, 18, 65)}):Play()
+    TweenService:Create(discordBarStroke, TweenInfo.new(0.18), {Transparency = 0.15}):Play()
+end)
+discordClickBtn.MouseLeave:Connect(function()
+    TweenService:Create(discordBar, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(20, 11, 38)}):Play()
+    TweenService:Create(discordBarStroke, TweenInfo.new(0.18), {Transparency = 0.55}):Play()
+end)
+
+-- Shadow
+local shadow = Instance.new("ImageLabel", main)
+shadow.BackgroundTransparency = 1
+shadow.AnchorPoint = Vector2.new(0.5, 0.5)
+shadow.Position = UDim2.new(0.5, 0, 0.5, 10)
+shadow.Size = UDim2.new(1, 50, 1, 50)
+shadow.Image = "rbxassetid://1316045217"
+shadow.ImageColor3 = Color3.fromRGB(80, 20, 180)
+shadow.ImageTransparency = 0.65
+shadow.ScaleType = Enum.ScaleType.Slice
+shadow.SliceCenter = Rect.new(10, 10, 118, 118)
+shadow.ZIndex = -2
+
+--// CORE LOGIC
+task.spawn(function()
+    while true do
+        local isStealing = lp:GetAttribute("Stealing") == true
+
+        if not isStealing then
+            State.stealing = false
+            State.desync = false
+            State.timer = 5
+            statusText.Text = "Waiting..."
+            statusText.TextColor3 = Color3.fromRGB(200, 200, 200)
+            statusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+        else
+            State.stealing = true
+            State.desync = true
+
+            task.wait(0.5)
+
+            if lp:GetAttribute("Stealing") == true then
+                doRollback()
+            end
+
+            while State.timer > 0 and lp:GetAttribute("Stealing") == true do
+                statusText.Text = string.format("%.1fs", State.timer)
+                statusText.TextColor3 = Color3.fromRGB(190, 120, 255)
+                statusDot.BackgroundColor3 = Color3.fromRGB(190, 120, 255)
+                task.wait(0.1)
+                State.timer = State.timer - 0.1
+            end
+
+            if lp:GetAttribute("Stealing") == true then
+                State.desync = false
+                statusText.Text = "Syncing..."
+                statusText.TextColor3 = Color3.fromRGB(150, 80, 255)
+
+                local char = lp.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local p = hrp.CFrame
+                    hrp.CFrame = p * CFrame.new(0, 1000, 0)
+                    task.wait(0.05)
+                    hrp.CFrame = p
+                end
+
+                task.wait(0.15)
+                State.desync = true
+                State.timer = 5
+            end
+        end
+
+        task.wait(0.05)
+    end
+end)
+
+--// POSITION SAVER
+task.spawn(function()
+    while true do
+        local char = lp.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp and (not State.stealing or not State.desync) then
+            lastSafePos = hrp.Position
+        end
+        task.wait(0.1)
+    end
+end)
+
+--// KEYBIND LISTENER
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+
+    if State.listeningForKey then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            State.keybind = input.KeyCode
+            State.listeningForKey = false
+
+            -- Mostra nome curto da key
+            local keyName = input.KeyCode.Name
+            keybindBadge.Text = #keyName > 3 and keyName:sub(1,2) or keyName
+
+            TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(80, 30, 160)}):Play()
+            TweenService:Create(keybindStroke, TweenInfo.new(0.18), {Color = Color3.fromRGB(160, 80, 255)}):Play()
+        end
+        return
+    end
+
+    if input.KeyCode == State.keybind then
+        doRollback()
+    end
+end)
+
+manualBtn.MouseButton1Click:Connect(doRollback)
+
+desyncToggleBtn.MouseButton1Click:Connect(function()
+    State.desyncEnabled = not State.desyncEnabled
+    if State.desyncEnabled then
+        desyncToggleBtn.Text = "DESYNC  —  ON"
+        desyncToggleBtn.TextColor3 = Color3.fromRGB(150, 255, 180)
+        desyncStroke.Color = Color3.fromRGB(70, 180, 110)
+    else
+        desyncToggleBtn.Text = "DESYNC  —  OFF"
+        desyncToggleBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+        desyncStroke.Color = Color3.fromRGB(180, 50, 50)
+        State.desync = false
+        State.stealing = false
+        statusText.Text = "Disabled"
+        statusText.TextColor3 = Color3.fromRGB(255, 100, 100)
+        statusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+    end
+end)
+
+saveBtn.MouseButton1Click:Connect(function()
+    local char = lp.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        State.savedPosition = char.HumanoidRootPart.CFrame
+        saveBtn.Text = "Position Saved!"
+        task.wait(1.5)
+        saveBtn.Text = "SAVE POSITION"
+    end
+end)
+
+--// DRAG
+local dragging, dragStart, startPos
+main.InputBegan:Connect(function(input)
+    if State.listeningForKey then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragStart = input.Position; startPos = main.Position
+    end
+end)
+UIS.InputChanged:Connect(function(input)
+    if dragging then
+        local delta = input.Position - dragStart
+        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+        saveUIPosition(main.Position)
+    end
+end)
+
+print("[ALBUX DESYNC V5] Loaded")
