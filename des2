@@ -8,7 +8,7 @@ if not game:IsLoaded() then game.Loaded:Wait() end
     "B9C6E3495B6F290F4EEAE3C7B3500CCFFA51F1E9D586D243BFF42E864BA966325E12A71A78FE0988687D38D2BF3396EE6F3E81ADCA872309F3647FBD6FE4DD5A",
     "566A73B371ABB6F15233DD5AD2E092BCA54ED2D57D5BCF48764A53B91E86F0E2E78FFBF92C85BE6B2477E89BC0851223CE1E5873A9CEF5FD08B7652255057FAA",
     "180054C7A080D4D7CC0607D1E38E3508FA51F1E9D586D243460026DB6002185635A4F9228A14F380C5E0E629EAD4916B1D8934E6E721261E1D7836B81",
-    "a",
+    "a6765c82e8c7a1bcfae27d57b714b7c001778f1ed1af98d99f7085cad9acc446",
     "a",
     "a",
     "a",
@@ -62,561 +62,1218 @@ game:GetService("StarterGui"):SetCore("SendNotification", {
 
 print("Script iniciado com sucesso!")
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
-local HttpService = game:GetService("HttpService")
+local Players      = game:GetService("Players")
+local UIS          = game:GetService("UserInputService")
+local HttpService  = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
+local RunService   = game:GetService("RunService")
 
 local lp = Players.LocalPlayer
-if not lp then
-    Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
-    lp = Players.LocalPlayer
-end
+if not raknet then warn("[Albux Hub V6] raknet não encontrado!") return end
 
-if not raknet then
-    print("Raknet not found!")
-    return
-end
-
+-- ════════════════════════════════════
+--  STATE
+-- ════════════════════════════════════
 local State = {
-    desync = false,
-    stealing = false,
-    timer = 5,
-    desyncEnabled = true,
-    keybind = Enum.KeyCode.R,
-    listeningForKey = false
+    desync          = false,
+    stealing        = false,
+    timer           = 5,
+    maxTimer        = 5,
+    isDelaying      = false,
+    enabled         = true,
+    listeningForKey = false,
+    keybind         = Enum.KeyCode.R,
 }
-
 local lastSafePos = nil
-local statusText, statusDot, keybindBadge, keybindStroke
+local statusText, statusDot, keybindBadge, keybindStroke, main, wrap
+local timerValueLabel, bindChipLabel, statusChipLabel
 
---// CONFIG
-local configFolder = "AlbuxDesync"
-local configFile = configFolder .. "/config.json"
+-- ════════════════════════════════════
+--  CONFIG
+-- ════════════════════════════════════
+local CFG_FOLDER = "AlbuxHub_V6"
+local CFG_FILE   = CFG_FOLDER .. "/config.json"
+if not isfolder(CFG_FOLDER) then makefolder(CFG_FOLDER) end
 
-if not isfolder(configFolder) then makefolder(configFolder) end
-
--- Carrega config ANTES de criar a UI
-local function loadConfig()
-    if isfile(configFile) then
-        local success, data = pcall(function()
-            return HttpService:JSONDecode(readfile(configFile))
-        end)
-        if success and data then
-            if data.Keybind then
-                local ok, kc = pcall(function()
-                    return Enum.KeyCode[data.Keybind]
-                end)
-                if ok and kc then
-                    State.keybind = kc
-                end
+local function LoadConfig()
+    if isfile and isfile(CFG_FILE) then
+        local ok, d = pcall(function() return HttpService:JSONDecode(readfile(CFG_FILE)) end)
+        if ok and d then
+            if d.Keybind then
+                local kok, kc = pcall(function() return Enum.KeyCode[d.Keybind] end)
+                if kok and kc then State.keybind = kc end
             end
-            return UDim2.new(
-                data.X or 0.5, data.XOffset or -135,
-                data.Y or 0.3, data.YOffset or 0
-            )
+            if d.MaxTimer then
+                State.maxTimer = math.clamp(d.MaxTimer, 1, 8)
+                State.timer    = State.maxTimer
+            end
+            return UDim2.new(d.X or 0.5, d.XO or -160, d.Y or 0.3, d.YO or 0)
         end
     end
-    return UDim2.new(0.5, -135, 0.3, 0)
+    return UDim2.new(0.5, -160, 0.3, 0)
 end
 
-local savedPos = loadConfig()
+local savedPos = LoadConfig()
 
---// DESYNC HOOKS
-local function send_hook(packet)
-    if not State.stealing or not State.desync or not State.desyncEnabled then return end
-    if packet.PacketId == 0x1B then
-        local b = packet.AsBuffer
-        buffer.writeu32(b, 1, 0xFFFFFFFF)
-        buffer.writeu32(b, 5, 0xFFFFFFFF)
-        buffer.writeu32(b, 9, 0xFFFFFFFF)
-        packet:SetData(b)
-    end
+local function SaveConfig()
+    pcall(function()
+        writefile(CFG_FILE, HttpService:JSONEncode({
+            X        = wrap.Position.X.Scale,
+            XO       = wrap.Position.X.Offset,
+            Y        = wrap.Position.Y.Scale,
+            YO       = wrap.Position.Y.Offset,
+            Keybind  = State.keybind.Name,
+            MaxTimer = State.maxTimer,
+        }))
+    end)
 end
 
-local function recv_hook(packet)
-    if not State.stealing or not State.desync or not State.desyncEnabled then return end
-    if packet.PacketId == 0x1B or packet.PacketId == 0x86 then packet:Drop() end
-end
-
-pcall(function()
-    if raknet.add_send_hook then raknet.add_send_hook(send_hook) end
-    if raknet.add_recv_hook then raknet.add_recv_hook(recv_hook) end
-end)
-
---// ROLLBACK
+-- ════════════════════════════════════
+--  ROLLBACK
+-- ════════════════════════════════════
 local function doRollback()
-    if lastSafePos and lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
-        lp.Character.HumanoidRootPart.CFrame = CFrame.new(lastSafePos)
-        State.timer = 5
-        if statusText then
-            statusText.Text = string.format("%.1fs", State.timer)
-            statusText.TextColor3 = Color3.fromRGB(190, 120, 255)
-        end
-        if statusDot then
-            statusDot.BackgroundColor3 = Color3.fromRGB(190, 120, 255)
-        end
+    local char = lp.Character
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp or not lastSafePos then return end
+    local was    = State.desync
+    State.desync = false
+    hrp.Velocity = Vector3.new(0,0,0)
+    hrp.CFrame   = CFrame.new(lastSafePos)
+    State.timer  = State.maxTimer
+    if statusText then
+        statusText.Text       = string.format("%.1fs", State.timer)
+        statusText.TextColor3 = Color3.fromRGB(180,120,255)
     end
+    if statusDot then statusDot.BackgroundColor3 = Color3.fromRGB(180,120,255) end
+    task.wait(0.05)
+    State.desync = was
 end
 
---// UI
-local gui = Instance.new("ScreenGui")
-gui.Name = "AlbuxDesyncUI"
-gui.ResetOnSpawn = false
-gui.Parent = (gethui and gethui()) or game.CoreGui
-
-local main = Instance.new("Frame")
-main.Parent = gui
-main.BackgroundColor3 = Color3.fromRGB(13, 8, 22)
-main.BorderSizePixel = 0
-main.Position = savedPos
-main.Size = UDim2.new(0, 270, 0, 370)
-main.ClipsDescendants = true
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 16)
-
--- saveConfig definida DEPOIS de main existir
-local function saveConfig()
-    writefile(configFile, HttpService:JSONEncode({
-        X = main.Position.X.Scale,
-        XOffset = main.Position.X.Offset,
-        Y = main.Position.Y.Scale,
-        YOffset = main.Position.Y.Offset,
-        Keybind = State.keybind.Name
-    }))
-end
-
--- Animated border
-local mainStroke = Instance.new("UIStroke", main)
-mainStroke.Thickness = 1.5
-
-task.spawn(function()
-    local t = 0
-    while true do
-        t = t + 0.02
-        local hue = 0.75 + math.sin(t) * 0.06
-        mainStroke.Color = Color3.fromHSV(hue, 0.8, 1)
-        task.wait(0.04)
-    end
+-- ════════════════════════════════════
+--  RAKNET
+-- ════════════════════════════════════
+pcall(function()
+    raknet.add_send_hook(function(p)
+        if not State.stealing or not State.desync or not State.enabled then return end
+        if p.PacketId == 0x1B then
+            local b = p.AsBuffer
+            buffer.writeu32(b,1,0xFFFFFFFF)
+            buffer.writeu32(b,5,0xFFFFFFFF)
+            buffer.writeu32(b,9,0xFFFFFFFF)
+            p:SetData(b)
+        end
+    end)
+    raknet.add_recv_hook(function(p)
+        if not State.stealing or not State.desync or not State.enabled then return end
+        if p.PacketId==0x1B or p.PacketId==0x86 or p.PacketId==0x21 then p:Drop() end
+    end)
 end)
 
+-- ════════════════════════════════════
+--  HELPERS
+-- ════════════════════════════════════
+local function Tween(obj, t, props, style, dir)
+    style = style or Enum.EasingStyle.Quart
+    dir   = dir   or Enum.EasingDirection.Out
+    TweenService:Create(obj, TweenInfo.new(t, style, dir), props):Play()
+end
+
+local function ApplyAnimatedGradient(obj, speed, colors)
+    speed  = speed or 0.008
+    colors = colors or ColorSequence.new{
+        ColorSequenceKeypoint.new(0,    Color3.fromRGB(80, 20, 200)),
+        ColorSequenceKeypoint.new(0.25, Color3.fromRGB(200,100,255)),
+        ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(120, 40,255)),
+        ColorSequenceKeypoint.new(0.75, Color3.fromRGB(220,140,255)),
+        ColorSequenceKeypoint.new(1,    Color3.fromRGB(80, 20, 200)),
+    }
+    local g = Instance.new("UIGradient", obj)
+    g.Color = colors
+    task.spawn(function()
+        local o = 0
+        while obj and obj.Parent do
+            o = (o + speed) % 1
+            g.Offset = Vector2.new(o, 0)
+            task.wait(0.03)
+        end
+    end)
+    return g
+end
+
+-- ════════════════════════════════════
+--  GUI ROOT
+-- ════════════════════════════════════
+local gui = Instance.new("ScreenGui")
+gui.Name           = "AlbuxHub_V6"
+gui.ResetOnSpawn   = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent         = (gethui and gethui()) or game.CoreGui
+
+-- ════════════════════════════════════
+--  WRAPPER
+-- ════════════════════════════════════
+wrap = Instance.new("Frame", gui)
+wrap.Name             = "Wrap"
+wrap.Size             = UDim2.new(0, 320, 0, 500)
+wrap.Position         = savedPos
+wrap.BackgroundTransparency = 1
+wrap.ZIndex           = 1
+
+-- ════════════════════════════════════
+--  MAIN WINDOW
+-- ════════════════════════════════════
+main = Instance.new("Frame", wrap)
+main.Name             = "Main"
+main.AnchorPoint      = Vector2.new(0.5, 0.5)
+main.Position         = UDim2.new(0.5, 0, 0.5, 0)
+main.Size             = UDim2.new(1, -20, 1, -20)
+main.BackgroundColor3 = Color3.fromRGB(10, 5, 20)
+main.BorderSizePixel  = 0
+main.ClipsDescendants = true
+main.ZIndex           = 2
+
+local mainCorner = Instance.new("UICorner", main)
+mainCorner.CornerRadius = UDim.new(0, 18)
+
+-- gradiente de fundo
 local bgGrad = Instance.new("UIGradient", main)
 bgGrad.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 12, 35)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 6, 18))
+    ColorSequenceKeypoint.new(0,    Color3.fromRGB(28, 14, 56)),
+    ColorSequenceKeypoint.new(0.45, Color3.fromRGB(14,  7, 32)),
+    ColorSequenceKeypoint.new(1,    Color3.fromRGB( 6,  3, 14)),
 }
 bgGrad.Rotation = 145
 
-local accentLine = Instance.new("Frame", main)
-accentLine.Size = UDim2.new(1, 0, 0, 3)
-accentLine.Position = UDim2.new(0, 0, 0, 0)
-accentLine.BackgroundColor3 = Color3.fromRGB(160, 80, 255)
-accentLine.BorderSizePixel = 0
-accentLine.ZIndex = 2
+-- ════════════════════════════════════
+--  CONTORNO LATERAL DESTACADO
+-- ════════════════════════════════════
 
-local accentGrad = Instance.new("UIGradient", accentLine)
-accentGrad.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(60, 0, 160)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(210, 110, 255)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(60, 0, 160))
-}
-
+-- BARRA ESQUERDA
+local leftBar = Instance.new("Frame", main)
+leftBar.Name = "LeftBar"
+leftBar.Size = UDim2.new(0, 4, 1, 0)
+leftBar.Position = UDim2.new(0, 0, 0, 0)
+leftBar.BackgroundColor3 = Color3.fromRGB(180, 80, 255)
+leftBar.BorderSizePixel = 0
+leftBar.ZIndex = 12
+ApplyAnimatedGradient(leftBar, 0.012, ColorSequence.new{
+    ColorSequenceKeypoint.new(0,    Color3.fromRGB(80, 20, 200)),
+    ColorSequenceKeypoint.new(0.3,  Color3.fromRGB(220, 140, 255)),
+    ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(255, 180, 255)),
+    ColorSequenceKeypoint.new(0.7,  Color3.fromRGB(220, 140, 255)),
+    ColorSequenceKeypoint.new(1,    Color3.fromRGB(80, 20, 200)),
+})
 task.spawn(function()
-    local offset = 0
-    while true do
-        offset = (offset + 0.012) % 1
-        accentGrad.Offset = Vector2.new(offset, 0)
-        task.wait(0.03)
+    while leftBar and leftBar.Parent do
+        for _, child in ipairs(leftBar:GetChildren()) do
+            if child:IsA("UIGradient") then child.Rotation = 90 end
+        end
+        task.wait(0.5)
     end
 end)
 
-local titleA = Instance.new("TextLabel", main)
-titleA.Size = UDim2.new(1, -100, 0, 36)
-titleA.Position = UDim2.new(0, 18, 0, 14)
-titleA.BackgroundTransparency = 1
-titleA.Text = "ALBUX"
-titleA.Font = Enum.Font.GothamBlack
-titleA.TextSize = 30
-titleA.TextXAlignment = Enum.TextXAlignment.Left
-
+-- BARRA DIREITA
+local rightBar = Instance.new("Frame", main)
+rightBar.Name = "RightBar"
+rightBar.Size = UDim2.new(0, 4, 1, 0)
+rightBar.Position = UDim2.new(1, -4, 0, 0)
+rightBar.BackgroundColor3 = Color3.fromRGB(180, 80, 255)
+rightBar.BorderSizePixel = 0
+rightBar.ZIndex = 12
+ApplyAnimatedGradient(rightBar, 0.012, ColorSequence.new{
+    ColorSequenceKeypoint.new(0,    Color3.fromRGB(80, 20, 200)),
+    ColorSequenceKeypoint.new(0.3,  Color3.fromRGB(220, 140, 255)),
+    ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(255, 180, 255)),
+    ColorSequenceKeypoint.new(0.7,  Color3.fromRGB(220, 140, 255)),
+    ColorSequenceKeypoint.new(1,    Color3.fromRGB(80, 20, 200)),
+})
 task.spawn(function()
-    local hue = 0.74
-    local dir = 1
-    while true do
-        hue = hue + 0.004 * dir
-        if hue > 0.84 then dir = -1 elseif hue < 0.72 then dir = 1 end
-        titleA.TextColor3 = Color3.fromHSV(hue, 0.65, 1)
+    while rightBar and rightBar.Parent do
+        for _, child in ipairs(rightBar:GetChildren()) do
+            if child:IsA("UIGradient") then child.Rotation = 90 end
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- glow interno nas laterais
+local leftGlow = Instance.new("Frame", main)
+leftGlow.Size = UDim2.new(0, 18, 1, 0)
+leftGlow.Position = UDim2.new(0, 4, 0, 0)
+leftGlow.BackgroundColor3 = Color3.fromRGB(140, 60, 255)
+leftGlow.BorderSizePixel = 0
+leftGlow.ZIndex = 11
+local lgGrad = Instance.new("UIGradient", leftGlow)
+lgGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(180, 80, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 80, 255)),
+}
+lgGrad.Transparency = NumberSequence.new{
+    NumberSequenceKeypoint.new(0, 0.55),
+    NumberSequenceKeypoint.new(1, 1),
+}
+
+local rightGlow = Instance.new("Frame", main)
+rightGlow.Size = UDim2.new(0, 18, 1, 0)
+rightGlow.Position = UDim2.new(1, -22, 0, 0)
+rightGlow.BackgroundColor3 = Color3.fromRGB(140, 60, 255)
+rightGlow.BorderSizePixel = 0
+rightGlow.ZIndex = 11
+local rgGrad = Instance.new("UIGradient", rightGlow)
+rgGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(180, 80, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 80, 255)),
+}
+rgGrad.Transparency = NumberSequence.new{
+    NumberSequenceKeypoint.new(0, 1),
+    NumberSequenceKeypoint.new(1, 0.55),
+}
+
+-- pulse nas barras laterais
+task.spawn(function()
+    while leftBar and leftBar.Parent do
+        TweenService:Create(leftBar, TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),{
+            Size = UDim2.new(0, 5, 1, 0),
+        }):Play()
+        TweenService:Create(rightBar, TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),{
+            Size = UDim2.new(0, 5, 1, 0),
+            Position = UDim2.new(1, -5, 0, 0),
+        }):Play()
+        TweenService:Create(leftGlow, TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),{
+            BackgroundTransparency = 0.3,
+        }):Play()
+        TweenService:Create(rightGlow, TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),{
+            BackgroundTransparency = 0.3,
+        }):Play()
+        break
+    end
+end)
+
+-- ════════════════════════════════════
+--  PARTÍCULAS FLUTUANTES
+-- ════════════════════════════════════
+local particleLayer = Instance.new("Frame", main)
+particleLayer.Size = UDim2.new(1, 0, 1, 0)
+particleLayer.BackgroundTransparency = 1
+particleLayer.ClipsDescendants = true
+particleLayer.ZIndex = 1
+
+for i = 1, 12 do
+    local dot = Instance.new("Frame", particleLayer)
+    local sz = math.random(2, 5)
+    dot.Size = UDim2.fromOffset(sz, sz)
+    dot.AnchorPoint = Vector2.new(0.5, 0.5)
+    dot.Position = UDim2.new(math.random(), 0, math.random(), 0)
+    dot.BackgroundColor3 = Color3.fromRGB(180 + math.random(0,75), 120, 255)
+    dot.BorderSizePixel = 0
+    dot.BackgroundTransparency = 0.4 + math.random()*0.4
+    dot.ZIndex = 1
+    local dc = Instance.new("UICorner", dot); dc.CornerRadius = UDim.new(1,0)
+    task.spawn(function()
+        while dot and dot.Parent do
+            local dur = math.random(40, 90)/10
+            Tween(dot, dur, {
+                Position = UDim2.new(math.random(), 0, math.random(), 0),
+                BackgroundTransparency = 0.3 + math.random()*0.5,
+            }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+            task.wait(dur)
+        end
+    end)
+end
+
+-- ── Top accent bar ──
+local acBar = Instance.new("Frame", main)
+acBar.Size            = UDim2.new(1, 0, 0, 3)
+acBar.BackgroundColor3= Color3.fromRGB(160, 60, 255)
+acBar.BorderSizePixel = 0
+acBar.ZIndex          = 10
+ApplyAnimatedGradient(acBar, 0.012)
+
+-- scan-line deslizante
+local scanLine = Instance.new("Frame", main)
+scanLine.Size = UDim2.new(0, 80, 0, 1)
+scanLine.Position = UDim2.new(0, -80, 0, 3)
+scanLine.BackgroundColor3 = Color3.fromRGB(255, 200, 255)
+scanLine.BorderSizePixel = 0
+scanLine.ZIndex = 11
+local slGrad = Instance.new("UIGradient", scanLine)
+slGrad.Transparency = NumberSequence.new{
+    NumberSequenceKeypoint.new(0, 1),
+    NumberSequenceKeypoint.new(0.5, 0),
+    NumberSequenceKeypoint.new(1, 1),
+}
+task.spawn(function()
+    while scanLine and scanLine.Parent do
+        scanLine.Position = UDim2.new(0, -80, 0, 3)
+        Tween(scanLine, 2.2, {Position = UDim2.new(1, 0, 0, 3)}, Enum.EasingStyle.Linear)
+        task.wait(3.5)
+    end
+end)
+
+-- ════════════════════════════════════
+--  LAYOUT CONSTANTS
+-- ════════════════════════════════════
+local PAD   = 16
+local W     = 300
+local INNER = W - PAD*2
+local CY    = 12
+
+local function nextY(h, gap)
+    gap = gap or 10
+    local y = CY
+    CY = CY + h + gap
+    return y
+end
+
+-- ════════════════════════════════════
+--  HEADER
+-- ════════════════════════════════════
+CY = 14
+
+local header = Instance.new("Frame", main)
+header.Size               = UDim2.new(0, INNER, 0, 56)
+header.Position           = UDim2.new(0, PAD, 0, CY)
+header.BackgroundTransparency = 1
+header.ZIndex             = 5
+nextY(56, 10)
+
+-- ── Icon box premium ──
+local iconBox = Instance.new("Frame", header)
+iconBox.Size             = UDim2.fromOffset(48, 48)
+iconBox.Position         = UDim2.new(0, 0, 0.5, -24)
+iconBox.BackgroundColor3 = Color3.fromRGB(14, 7, 28)
+iconBox.BorderSizePixel  = 0
+iconBox.ZIndex           = 6
+local ic = Instance.new("UICorner", iconBox); ic.CornerRadius = UDim.new(0,13)
+local is = Instance.new("UIStroke", iconBox)
+is.Color = Color3.fromRGB(180,90,255); is.Thickness=1.6; is.Transparency=0.15
+is.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+local isGrad = Instance.new("UIGradient", is)
+isGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 100, 220)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(140, 60, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(80, 20, 200)),
+}
+task.spawn(function()
+    local r = 0
+    while iconBox and iconBox.Parent do
+        r = (r+2)%360
+        isGrad.Rotation = r
         task.wait(0.04)
     end
 end)
 
-local titleB = Instance.new("TextLabel", main)
-titleB.Size = UDim2.new(1, -100, 0, 16)
-titleB.Position = UDim2.new(0, 20, 0, 46)
-titleB.BackgroundTransparency = 1
-titleB.Text = "DESYNC MODULE"
-titleB.Font = Enum.Font.Gotham
-titleB.TextSize = 11
-titleB.TextColor3 = Color3.fromRGB(150, 90, 240)
-titleB.TextXAlignment = Enum.TextXAlignment.Left
+local iconBg = Instance.new("UIGradient", iconBox)
+iconBg.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 16, 80)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(8,  4, 18)),
+}
+iconBg.Rotation = 135
 
-local vFrame = Instance.new("Frame", main)
-vFrame.Size = UDim2.new(0, 34, 0, 20)
-vFrame.Position = UDim2.new(1, -50, 0, 22)
-vFrame.BackgroundColor3 = Color3.fromRGB(90, 40, 180)
-vFrame.BorderSizePixel = 0
-Instance.new("UICorner", vFrame).CornerRadius = UDim.new(0, 6)
+-- glow externo da logo
+local iconGlow = Instance.new("ImageLabel", iconBox)
+iconGlow.AnchorPoint = Vector2.new(0.5, 0.5)
+iconGlow.Position = UDim2.new(0.5, 0, 0.5, 0)
+iconGlow.Size = UDim2.new(1, 30, 1, 30)
+iconGlow.BackgroundTransparency = 1
+iconGlow.Image = "rbxassetid://5028857084"
+iconGlow.ImageColor3 = Color3.fromRGB(180, 80, 255)
+iconGlow.ImageTransparency = 0.4
+iconGlow.ScaleType = Enum.ScaleType.Slice
+iconGlow.SliceCenter = Rect.new(24, 24, 276, 276)
+iconGlow.ZIndex = 5
 
-local vLabel = Instance.new("TextLabel", vFrame)
-vLabel.Size = UDim2.new(1, 0, 1, 0)
-vLabel.BackgroundTransparency = 1
-vLabel.Text = "V5"
-vLabel.Font = Enum.Font.GothamBold
-vLabel.TextSize = 11
-vLabel.TextColor3 = Color3.fromRGB(220, 190, 255)
-
-local divider = Instance.new("Frame", main)
-divider.Size = UDim2.new(0.88, 0, 0, 1)
-divider.Position = UDim2.new(0.06, 0, 0, 72)
-divider.BackgroundColor3 = Color3.fromRGB(60, 30, 110)
-divider.BorderSizePixel = 0
-
-local statusBox = Instance.new("Frame", main)
-statusBox.Size = UDim2.new(0.88, 0, 0, 58)
-statusBox.Position = UDim2.new(0.06, 0, 0, 84)
-statusBox.BackgroundColor3 = Color3.fromRGB(20, 12, 35)
-statusBox.BorderSizePixel = 0
-Instance.new("UICorner", statusBox).CornerRadius = UDim.new(0, 10)
-
-local statusBoxStroke = Instance.new("UIStroke", statusBox)
-statusBoxStroke.Color = Color3.fromRGB(90, 45, 170)
-statusBoxStroke.Transparency = 0.5
-
-statusDot = Instance.new("Frame", statusBox)
-statusDot.Size = UDim2.new(0, 8, 0, 8)
-statusDot.Position = UDim2.new(0, 14, 0.5, -4)
-statusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
-statusDot.BorderSizePixel = 0
-Instance.new("UICorner", statusDot).CornerRadius = UDim.new(1, 0)
+-- a logo
+local iconImg = Instance.new("ImageLabel", iconBox)
+iconImg.Size = UDim2.new(1, 8, 1, 8)
+iconImg.Position = UDim2.new(0, -4, 0, -4)
+iconImg.BackgroundTransparency = 1
+iconImg.Image = "rbxassetid://132707392197941"
+iconImg.ScaleType = Enum.ScaleType.Fit
+iconImg.ZIndex = 8
 
 task.spawn(function()
-    while true do
-        TweenService:Create(statusDot, TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
-            Size = UDim2.new(0, 10, 0, 10),
-            Position = UDim2.new(0, 13, 0.5, -5)
-        }):Play()
-        task.wait(0.9)
+    TweenService:Create(is, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),{
+        Transparency = 0,
+        Thickness = 2.4,
+    }):Play()
+    TweenService:Create(iconGlow, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),{
+        ImageTransparency = 0.2,
+        Size = UDim2.new(1, 50, 1, 50),
+    }):Play()
+end)
+
+-- TÍTULO com gradiente animado
+local titleLbl = Instance.new("TextLabel", header)
+titleLbl.Size             = UDim2.new(0, 160, 0, 30)
+titleLbl.Position         = UDim2.new(0, 58, 0, 6)
+titleLbl.BackgroundTransparency = 1
+titleLbl.Text             = "ALBUX HUB"
+titleLbl.Font             = Enum.Font.GothamBlack
+titleLbl.TextSize         = 24
+titleLbl.TextXAlignment   = Enum.TextXAlignment.Left
+titleLbl.TextColor3       = Color3.fromRGB(255,255,255)
+titleLbl.ZIndex           = 6
+
+local titleGrad = Instance.new("UIGradient", titleLbl)
+titleGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0,    Color3.fromRGB(255, 180, 255)),
+    ColorSequenceKeypoint.new(0.4,  Color3.fromRGB(180, 100, 255)),
+    ColorSequenceKeypoint.new(0.6,  Color3.fromRGB(255, 200, 255)),
+    ColorSequenceKeypoint.new(1,    Color3.fromRGB(140,  60, 220)),
+}
+task.spawn(function()
+    local r = 0
+    while titleLbl and titleLbl.Parent do
+        r = (r+1)%360
+        titleGrad.Rotation = r
+        task.wait(0.04)
     end
 end)
 
-local nextLabel = Instance.new("TextLabel", statusBox)
-nextLabel.Text = "NEXT ROLLBACK"
-nextLabel.Position = UDim2.new(0, 30, 0, 8)
-nextLabel.Size = UDim2.new(0, 180, 0, 14)
-nextLabel.TextColor3 = Color3.fromRGB(130, 75, 210)
-nextLabel.Font = Enum.Font.GothamBold
-nextLabel.TextSize = 9
-nextLabel.BackgroundTransparency = 1
-nextLabel.TextXAlignment = Enum.TextXAlignment.Left
+local shimLbl = Instance.new("TextLabel", header)
+shimLbl.Size=titleLbl.Size; shimLbl.Position=titleLbl.Position
+shimLbl.BackgroundTransparency=1; shimLbl.Text="ALBUX HUB"
+shimLbl.Font=Enum.Font.GothamBlack; shimLbl.TextSize=24
+shimLbl.TextXAlignment=Enum.TextXAlignment.Left
+shimLbl.TextTransparency=0.55; shimLbl.TextColor3=Color3.fromRGB(255,255,255); shimLbl.ZIndex=7
+local shimGrad=Instance.new("UIGradient",shimLbl)
+shimGrad.Color=ColorSequence.new{
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(255,255,255)),
+    ColorSequenceKeypoint.new(0.4,Color3.fromRGB(60,30,140)),
+    ColorSequenceKeypoint.new(0.5,Color3.fromRGB(255,255,255)),
+    ColorSequenceKeypoint.new(0.6,Color3.fromRGB(60,30,140)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(255,255,255)),
+}
+task.spawn(function()
+    local o=-0.6
+    while shimLbl and shimLbl.Parent do
+        o+=0.018; if o>1.4 then o=-0.6 end
+        shimGrad.Offset=Vector2.new(o,0); task.wait(0.04)
+    end
+end)
 
-statusText = Instance.new("TextLabel", statusBox)
-statusText.Text = "Waiting..."
-statusText.Position = UDim2.new(0, 30, 0, 22)
-statusText.Size = UDim2.new(0, 200, 0, 26)
-statusText.TextColor3 = Color3.fromRGB(255, 255, 255)
-statusText.Font = Enum.Font.GothamBlack
-statusText.TextSize = 20
-statusText.BackgroundTransparency = 1
-statusText.TextXAlignment = Enum.TextXAlignment.Left
+local subLbl = Instance.new("TextLabel", header)
+subLbl.Size=UDim2.new(0,160,0,14); subLbl.Position=UDim2.new(0,59,0,36)
+subLbl.BackgroundTransparency=1; subLbl.Text="✦ DESYNC MODULE ✦"
+subLbl.Font=Enum.Font.GothamBold; subLbl.TextSize=9
+subLbl.TextXAlignment=Enum.TextXAlignment.Left
+subLbl.TextColor3=Color3.fromRGB(140,75,225); subLbl.ZIndex=6
 
-local function makeBtn(text, yPos, w, xPos, textColor)
-    local btn = Instance.new("TextButton", main)
-    btn.Size = w or UDim2.new(0.88, 0, 0, 40)
-    btn.Position = xPos or UDim2.new(0.06, 0, 0, yPos)
-    btn.BackgroundColor3 = Color3.fromRGB(22, 13, 40)
-    btn.Text = text
-    btn.TextColor3 = textColor or Color3.fromRGB(200, 160, 255)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 13
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+-- V6 badge premium
+local vBadge=Instance.new("Frame",header)
+vBadge.Size=UDim2.fromOffset(46,24); vBadge.Position=UDim2.new(1,-46,0,2)
+vBadge.BackgroundColor3=Color3.fromRGB(70,25,160); vBadge.BorderSizePixel=0; vBadge.ZIndex=6
+local vc=Instance.new("UICorner",vBadge); vc.CornerRadius=UDim.new(0,8)
+ApplyAnimatedGradient(vBadge, 0.015, ColorSequence.new{
+    ColorSequenceKeypoint.new(0,    Color3.fromRGB(50, 12, 130)),
+    ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(140, 60, 255)),
+    ColorSequenceKeypoint.new(1,    Color3.fromRGB(50, 12, 130)),
+})
+local vs=Instance.new("UIStroke",vBadge)
+vs.Color=Color3.fromRGB(200,140,255); vs.Thickness=1.2; vs.Transparency=0.1
+vs.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+local vLbl=Instance.new("TextLabel",vBadge)
+vLbl.Size=UDim2.new(1,0,1,0); vLbl.BackgroundTransparency=1
+vLbl.Text="V6"; vLbl.Font=Enum.Font.GothamBlack; vLbl.TextSize=12
+vLbl.TextColor3=Color3.fromRGB(255,230,255); vLbl.ZIndex=7
 
-    local stroke = Instance.new("UIStroke", btn)
-    stroke.Color = Color3.fromRGB(90, 45, 170)
-    stroke.Transparency = 0.55
-
-    btn.MouseEnter:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(42, 22, 75)}):Play()
-        TweenService:Create(stroke, TweenInfo.new(0.18), {Transparency = 0.1}):Play()
-    end)
-    btn.MouseLeave:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(22, 13, 40)}):Play()
-        TweenService:Create(stroke, TweenInfo.new(0.18), {Transparency = 0.55}):Play()
-    end)
-
-    return btn, stroke
+-- ── separator ──
+local function MakeSep(yPos)
+    local s=Instance.new("Frame",main)
+    s.Size=UDim2.new(0,INNER,0,1); s.Position=UDim2.new(0,PAD,0,yPos)
+    s.BackgroundColor3=Color3.fromRGB(45,18,95); s.BorderSizePixel=0; s.ZIndex=5
+    local g=Instance.new("UIGradient",s)
+    g.Color=ColorSequence.new{
+        ColorSequenceKeypoint.new(0,Color3.fromRGB(20,8,50)),
+        ColorSequenceKeypoint.new(0.5,Color3.fromRGB(180,100,255)),
+        ColorSequenceKeypoint.new(1,Color3.fromRGB(20,8,50)),
+    }
+    return s
 end
 
-local manualBtn, _ = makeBtn(
-    "MANUAL ROLLBACK",
-    158,
-    UDim2.new(0, 182, 0, 40),
-    UDim2.new(0, 16, 0, 158)
-)
+MakeSep(nextY(0, 0) - 2)
+CY += 8
 
-keybindBadge = Instance.new("TextButton", main)
-keybindBadge.Size = UDim2.new(0, 46, 0, 40)
-keybindBadge.Position = UDim2.new(0, 206, 0, 158)
-keybindBadge.BackgroundColor3 = Color3.fromRGB(80, 30, 160)
-keybindBadge.TextColor3 = Color3.fromRGB(230, 200, 255)
-keybindBadge.Font = Enum.Font.GothamBlack
-keybindBadge.TextSize = 16
-keybindBadge.BorderSizePixel = 0
-keybindBadge.AutoButtonColor = false
-Instance.new("UICorner", keybindBadge).CornerRadius = UDim.new(0, 10)
+-- ════════════════════════════════════
+--  STATUS CARD glassmorphism
+-- ════════════════════════════════════
+local scY = CY
+local statusCard=Instance.new("Frame",main)
+statusCard.Size=UDim2.new(0,INNER,0,72)
+statusCard.Position=UDim2.new(0,PAD,0,scY)
+statusCard.BackgroundColor3=Color3.fromRGB(16,9,32)
+statusCard.BorderSizePixel=0; statusCard.ZIndex=5
+statusCard.ClipsDescendants = true
+local scc=Instance.new("UICorner",statusCard); scc.CornerRadius=UDim.new(0,13)
+local scStroke=Instance.new("UIStroke",statusCard)
+scStroke.Color=Color3.fromRGB(100,40,200); scStroke.Thickness=1.3; scStroke.Transparency=0.2
+scStroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+nextY(72, 10)
 
-local loadedKeyName = State.keybind.Name
-keybindBadge.Text = #loadedKeyName > 3 and loadedKeyName:sub(1, 3) or loadedKeyName
+local scGrad = Instance.new("UIGradient", statusCard)
+scGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 14, 65)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 6, 26)),
+}
+scGrad.Rotation = 120
 
-keybindStroke = Instance.new("UIStroke", keybindBadge)
-keybindStroke.Color = Color3.fromRGB(160, 80, 255)
-keybindStroke.Transparency = 0.2
-keybindStroke.Thickness = 1.5
+local cardAc=Instance.new("Frame",statusCard)
+cardAc.Size=UDim2.new(1,0,0,2); cardAc.BackgroundColor3=Color3.fromRGB(180,80,255)
+cardAc.BorderSizePixel=0; cardAc.ZIndex=8
+ApplyAnimatedGradient(cardAc, 0.01)
+
+local scScan = Instance.new("Frame", statusCard)
+scScan.Size = UDim2.new(0, 60, 1, 0)
+scScan.Position = UDim2.new(0, -60, 0, 0)
+scScan.BackgroundColor3 = Color3.fromRGB(180, 100, 255)
+scScan.BorderSizePixel = 0
+scScan.ZIndex = 6
+local scScanG = Instance.new("UIGradient", scScan)
+scScanG.Transparency = NumberSequence.new{
+    NumberSequenceKeypoint.new(0, 1),
+    NumberSequenceKeypoint.new(0.5, 0.85),
+    NumberSequenceKeypoint.new(1, 1),
+}
+task.spawn(function()
+    while scScan and scScan.Parent do
+        scScan.Position = UDim2.new(0, -60, 0, 0)
+        Tween(scScan, 3.5, {Position = UDim2.new(1, 0, 0, 0)}, Enum.EasingStyle.Linear)
+        task.wait(5)
+    end
+end)
+
+statusDot=Instance.new("Frame",statusCard)
+statusDot.Size=UDim2.fromOffset(11,11); statusDot.Position=UDim2.new(0,14,0.5,-5.5)
+statusDot.BackgroundColor3=Color3.fromRGB(255,60,60); statusDot.BorderSizePixel=0; statusDot.ZIndex=7
+local sdc=Instance.new("UICorner",statusDot); sdc.CornerRadius=UDim.new(1,0)
+
+local dotGlow = Instance.new("ImageLabel", statusCard)
+dotGlow.AnchorPoint = Vector2.new(0.5, 0.5)
+dotGlow.Position = UDim2.new(0, 19.5, 0.5, 0)
+dotGlow.Size = UDim2.fromOffset(28, 28)
+dotGlow.BackgroundTransparency = 1
+dotGlow.Image = "rbxassetid://5028857084"
+dotGlow.ImageColor3 = Color3.fromRGB(255, 60, 60)
+dotGlow.ImageTransparency = 0.3
+dotGlow.ScaleType = Enum.ScaleType.Slice
+dotGlow.SliceCenter = Rect.new(24, 24, 276, 276)
+dotGlow.ZIndex = 6
+
+task.spawn(function()
+    while statusDot and statusDot.Parent do
+        TweenService:Create(statusDot,TweenInfo.new(0.9,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,0,true),{
+            Size=UDim2.fromOffset(14,14), Position=UDim2.new(0,12.5,0.5,-7)
+        }):Play()
+        TweenService:Create(dotGlow,TweenInfo.new(0.9,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,0,true),{
+            ImageTransparency = 0.55,
+            Size = UDim2.fromOffset(38, 38),
+        }):Play()
+        task.wait(1.8)
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if dotGlow and statusDot then
+        dotGlow.ImageColor3 = statusDot.BackgroundColor3
+    end
+end)
+
+local nextLbl=Instance.new("TextLabel",statusCard)
+nextLbl.Text="◆ NEXT ROLLBACK"; nextLbl.Position=UDim2.new(0,34,0,12)
+nextLbl.Size=UDim2.new(1,-38,0,14); nextLbl.BackgroundTransparency=1
+nextLbl.Font=Enum.Font.GothamBold; nextLbl.TextSize=9
+nextLbl.TextColor3=Color3.fromRGB(140,75,210); nextLbl.TextXAlignment=Enum.TextXAlignment.Left
+nextLbl.ZIndex=7
+
+statusText=Instance.new("TextLabel",statusCard)
+statusText.Text="Waiting..."; statusText.Position=UDim2.new(0,34,0,26)
+statusText.Size=UDim2.new(1,-38,0,36); statusText.BackgroundTransparency=1
+statusText.Font=Enum.Font.GothamBlack; statusText.TextSize=28
+statusText.TextColor3=Color3.fromRGB(235,225,255)
+statusText.TextXAlignment=Enum.TextXAlignment.Left; statusText.ZIndex=7
+
+-- ════════════════════════════════════
+--  BUTTON FACTORY PREMIUM
+-- ════════════════════════════════════
+local function MakeBtn(labelText, yPos, accentColor, textColor)
+    accentColor = accentColor or Color3.fromRGB(140,60,255)
+    textColor   = textColor   or Color3.fromRGB(220,180,255)
+
+    local frame=Instance.new("Frame",main)
+    frame.Size=UDim2.new(0,INNER,0,44)
+    frame.Position=UDim2.new(0,PAD,0,yPos)
+    frame.BackgroundColor3=Color3.fromRGB(16,9,32)
+    frame.BorderSizePixel=0; frame.ZIndex=5
+    frame.ClipsDescendants = true
+    local fc=Instance.new("UICorner",frame); fc.CornerRadius=UDim.new(0,12)
+
+    local fGrad = Instance.new("UIGradient", frame)
+    fGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(28, 14, 60)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 6, 26)),
+    }
+    fGrad.Rotation = 90
+
+    local fs=Instance.new("UIStroke",frame)
+    fs.Color=accentColor; fs.Thickness=1.2; fs.Transparency=0.5
+    fs.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+    local pill=Instance.new("Frame",frame)
+    pill.Size=UDim2.fromOffset(3,22); pill.Position=UDim2.new(0,10,0.5,-11)
+    pill.BackgroundColor3=accentColor; pill.BorderSizePixel=0; pill.ZIndex=7
+    local pc=Instance.new("UICorner",pill); pc.CornerRadius=UDim.new(0,3)
+
+    local hoverShine = Instance.new("Frame", frame)
+    hoverShine.Size = UDim2.new(0, 60, 1, 0)
+    hoverShine.Position = UDim2.new(0, -80, 0, 0)
+    hoverShine.BackgroundColor3 = accentColor
+    hoverShine.BorderSizePixel = 0
+    hoverShine.ZIndex = 6
+    local hsg = Instance.new("UIGradient", hoverShine)
+    hsg.Transparency = NumberSequence.new{
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.5, 0.75),
+        NumberSequenceKeypoint.new(1, 1),
+    }
+
+    local btn=Instance.new("TextButton",frame)
+    btn.Size=UDim2.new(1,0,1,0); btn.BackgroundTransparency=1
+    btn.Text=labelText; btn.TextColor3=textColor
+    btn.Font=Enum.Font.GothamBold; btn.TextSize=13
+    btn.BorderSizePixel=0; btn.ZIndex=8
+    btn.AutoButtonColor=false
+
+    btn.MouseEnter:Connect(function()
+        Tween(frame,.2,{BackgroundColor3=Color3.fromRGB(32,16,68)})
+        Tween(fs,.2,{Transparency=0,Color=accentColor})
+        Tween(pill,.2,{Size=UDim2.fromOffset(4,28), Position=UDim2.new(0,10,0.5,-14)})
+        hoverShine.Position = UDim2.new(0, -80, 0, 0)
+        Tween(hoverShine, 0.6, {Position = UDim2.new(1, 20, 0, 0)}, Enum.EasingStyle.Quart)
+    end)
+    btn.MouseLeave:Connect(function()
+        Tween(frame,.2,{BackgroundColor3=Color3.fromRGB(16,9,32)})
+        Tween(fs,.2,{Transparency=0.5,Color=accentColor})
+        Tween(pill,.2,{Size=UDim2.fromOffset(3,22), Position=UDim2.new(0,10,0.5,-11)})
+    end)
+    btn.MouseButton1Down:Connect(function() Tween(frame,.07,{BackgroundColor3=Color3.fromRGB(45,22,90)}) end)
+    btn.MouseButton1Up:Connect(function()   Tween(frame,.12,{BackgroundColor3=Color3.fromRGB(32,16,68)}) end)
+
+    return btn, frame, fs, pill
+end
+
+-- ── Manual Rollback + Keybind ──
+local mrY = CY
+nextY(44, 10)
+
+local KB_W  = 48
+local KB_GAP = 8
+local MB_W  = INNER - KB_W - KB_GAP
+
+local mbFrame=Instance.new("Frame",main)
+mbFrame.Size=UDim2.new(0,MB_W,0,44); mbFrame.Position=UDim2.new(0,PAD,0,mrY)
+mbFrame.BackgroundColor3=Color3.fromRGB(16,9,32); mbFrame.BorderSizePixel=0; mbFrame.ZIndex=5
+mbFrame.ClipsDescendants = true
+local mbc=Instance.new("UICorner",mbFrame); mbc.CornerRadius=UDim.new(0,12)
+local mbg=Instance.new("UIGradient",mbFrame)
+mbg.Color=ColorSequence.new{
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(28,14,60)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(12,6,26)),
+}
+mbg.Rotation=90
+local mbStroke=Instance.new("UIStroke",mbFrame)
+mbStroke.Color=Color3.fromRGB(140,60,255); mbStroke.Thickness=1.2; mbStroke.Transparency=0.5
+mbStroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+local mbPill=Instance.new("Frame",mbFrame)
+mbPill.Size=UDim2.fromOffset(3,22); mbPill.Position=UDim2.new(0,10,0.5,-11)
+mbPill.BackgroundColor3=Color3.fromRGB(140,60,255); mbPill.BorderSizePixel=0; mbPill.ZIndex=7
+local mbpc=Instance.new("UICorner",mbPill); mbpc.CornerRadius=UDim.new(0,3)
+
+local mbShine = Instance.new("Frame", mbFrame)
+mbShine.Size = UDim2.new(0, 60, 1, 0)
+mbShine.Position = UDim2.new(0, -80, 0, 0)
+mbShine.BackgroundColor3 = Color3.fromRGB(180,100,255)
+mbShine.BorderSizePixel = 0
+mbShine.ZIndex = 6
+local mbsg = Instance.new("UIGradient", mbShine)
+mbsg.Transparency = NumberSequence.new{
+    NumberSequenceKeypoint.new(0, 1),
+    NumberSequenceKeypoint.new(0.5, 0.75),
+    NumberSequenceKeypoint.new(1, 1),
+}
+
+local manualBtn=Instance.new("TextButton",mbFrame)
+manualBtn.Size=UDim2.new(1,0,1,0); manualBtn.BackgroundTransparency=1
+manualBtn.Text="⚡ MANUAL ROLLBACK"; manualBtn.TextColor3=Color3.fromRGB(220,180,255)
+manualBtn.Font=Enum.Font.GothamBold; manualBtn.TextSize=13
+manualBtn.BorderSizePixel=0; manualBtn.ZIndex=8
+manualBtn.AutoButtonColor=false
+
+manualBtn.MouseEnter:Connect(function()
+    Tween(mbFrame,.2,{BackgroundColor3=Color3.fromRGB(32,16,68)})
+    Tween(mbStroke,.2,{Transparency=0,Color=Color3.fromRGB(180,100,255)})
+    Tween(mbPill,.2,{Size=UDim2.fromOffset(4,28), Position=UDim2.new(0,10,0.5,-14)})
+    mbShine.Position = UDim2.new(0, -80, 0, 0)
+    Tween(mbShine, 0.6, {Position = UDim2.new(1, 20, 0, 0)}, Enum.EasingStyle.Quart)
+end)
+manualBtn.MouseLeave:Connect(function()
+    Tween(mbFrame,.2,{BackgroundColor3=Color3.fromRGB(16,9,32)})
+    Tween(mbStroke,.2,{Transparency=0.5,Color=Color3.fromRGB(140,60,255)})
+    Tween(mbPill,.2,{Size=UDim2.fromOffset(3,22), Position=UDim2.new(0,10,0.5,-11)})
+end)
+
+-- KEYBIND BADGE PREMIUM
+keybindBadge=Instance.new("TextButton",main)
+keybindBadge.Size=UDim2.new(0,KB_W,0,44)
+keybindBadge.Position=UDim2.new(0, PAD+MB_W+KB_GAP, 0, mrY)
+keybindBadge.BackgroundColor3=Color3.fromRGB(70,25,160)
+keybindBadge.TextColor3=Color3.fromRGB(255,230,255)
+keybindBadge.Font=Enum.Font.GothamBlack; keybindBadge.TextSize=15
+keybindBadge.BorderSizePixel=0; keybindBadge.AutoButtonColor=false; keybindBadge.ZIndex=7
+local kbc=Instance.new("UICorner",keybindBadge); kbc.CornerRadius=UDim.new(0,12)
+ApplyAnimatedGradient(keybindBadge, 0.012, ColorSequence.new{
+    ColorSequenceKeypoint.new(0,    Color3.fromRGB(60, 18, 140)),
+    ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(160, 80, 255)),
+    ColorSequenceKeypoint.new(1,    Color3.fromRGB(60, 18, 140)),
+})
+keybindStroke=Instance.new("UIStroke",keybindBadge)
+keybindStroke.Color=Color3.fromRGB(200,140,255); keybindStroke.Thickness=1.5; keybindStroke.Transparency=0.1
+keybindStroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+local function refreshKB()
+    local n=State.keybind.Name
+    keybindBadge.Text = #n>3 and n:sub(1,3) or n
+    if bindChipLabel then
+        bindChipLabel.Text = #n>3 and n:sub(1,3) or n
+    end
+end
+refreshKB()
 
 keybindBadge.MouseEnter:Connect(function()
-    TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(120, 50, 220)}):Play()
+    if not State.listeningForKey then
+        Tween(keybindBadge,.15,{Size=UDim2.new(0,KB_W+2,0,46), Position=UDim2.new(0, PAD+MB_W+KB_GAP-1, 0, mrY-1)})
+    end
 end)
 keybindBadge.MouseLeave:Connect(function()
     if not State.listeningForKey then
-        TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(80, 30, 160)}):Play()
+        Tween(keybindBadge,.15,{Size=UDim2.new(0,KB_W,0,44), Position=UDim2.new(0, PAD+MB_W+KB_GAP, 0, mrY)})
     end
 end)
-
 keybindBadge.MouseButton1Click:Connect(function()
     if State.listeningForKey then return end
-    State.listeningForKey = true
-    keybindBadge.Text = "?"
-    TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(180, 100, 50)}):Play()
-    TweenService:Create(keybindStroke, TweenInfo.new(0.18), {Color = Color3.fromRGB(255, 160, 60)}):Play()
+    State.listeningForKey=true; keybindBadge.Text="?"
+    Tween(keybindStroke,.15,{Color=Color3.fromRGB(255,160,50), Transparency=0})
 end)
 
-local desyncToggleBtn, desyncStroke = makeBtn("DESYNC  —  ON", 207, nil, nil, Color3.fromRGB(150, 255, 180))
-local saveBtn, _ = makeBtn("SAVE POSITION", 256)
+-- ── Desync toggle ──
+local desyncBtn, desyncFrame, desyncStroke, desyncPill =
+    MakeBtn("⚙ DESYNC  ——  ON", CY, Color3.fromRGB(60,220,130), Color3.fromRGB(140,255,180))
+nextY(44, 10)
 
-local discordBar = Instance.new("Frame", main)
-discordBar.Size = UDim2.new(0.88, 0, 0, 36)
-discordBar.Position = UDim2.new(0.06, 0, 0, 313)
-discordBar.BackgroundColor3 = Color3.fromRGB(20, 11, 38)
-discordBar.BorderSizePixel = 0
-Instance.new("UICorner", discordBar).CornerRadius = UDim.new(0, 10)
+-- ════════════════════════════════════
+--  TIMER SLIDER (1s – 8s)
+-- ════════════════════════════════════
+local sliderY = CY
+nextY(54, 10)
 
-local discordBarStroke = Instance.new("UIStroke", discordBar)
-discordBarStroke.Color = Color3.fromRGB(90, 45, 170)
-discordBarStroke.Transparency = 0.55
+local sliderCard=Instance.new("Frame",main)
+sliderCard.Size=UDim2.new(0,INNER,0,54); sliderCard.Position=UDim2.new(0,PAD,0,sliderY)
+sliderCard.BackgroundColor3=Color3.fromRGB(16,9,32); sliderCard.BorderSizePixel=0; sliderCard.ZIndex=5
+local slc=Instance.new("UICorner",sliderCard); slc.CornerRadius=UDim.new(0,12)
+local slg=Instance.new("UIGradient",sliderCard)
+slg.Color=ColorSequence.new{
+    ColorSequenceKeypoint.new(0,Color3.fromRGB(28,14,60)),
+    ColorSequenceKeypoint.new(1,Color3.fromRGB(12,6,26)),
+}
+slg.Rotation=90
+local sls=Instance.new("UIStroke",sliderCard)
+sls.Color=Color3.fromRGB(100,40,200); sls.Thickness=1.2; sls.Transparency=0.4
+sls.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
 
-local discordText = Instance.new("TextLabel", discordBar)
-discordText.Size = UDim2.new(1, -20, 1, 0)
-discordText.Position = UDim2.new(0, 14, 0, 0)
-discordText.BackgroundTransparency = 1
-discordText.Text = "discord.gg/albuxhub"
-discordText.Font = Enum.Font.GothamBold
-discordText.TextSize = 13
-discordText.TextXAlignment = Enum.TextXAlignment.Left
+local slTopRow=Instance.new("Frame",sliderCard)
+slTopRow.Size=UDim2.new(1,-20,0,16); slTopRow.Position=UDim2.new(0,10,0,8)
+slTopRow.BackgroundTransparency=1; slTopRow.ZIndex=6
 
-task.spawn(function()
-    local hue = 0.74
-    local dir = 1
-    while true do
-        hue = hue + 0.005 * dir
-        if hue > 0.84 then dir = -1 elseif hue < 0.72 then dir = 1 end
-        discordText.TextColor3 = Color3.fromHSV(hue, 0.5, 1)
-        task.wait(0.05)
+local slLabel=Instance.new("TextLabel",slTopRow)
+slLabel.Size=UDim2.new(0,180,1,0); slLabel.BackgroundTransparency=1
+slLabel.Text="◆ ROLLBACK TIMER  (1s – 8s)"
+slLabel.Font=Enum.Font.GothamBold; slLabel.TextSize=9
+slLabel.TextColor3=Color3.fromRGB(140,75,210); slLabel.TextXAlignment=Enum.TextXAlignment.Left; slLabel.ZIndex=7
+
+local slVal=Instance.new("TextLabel",slTopRow)
+slVal.Size=UDim2.new(1,-180,1,0); slVal.Position=UDim2.new(0,180,0,0)
+slVal.BackgroundTransparency=1; slVal.Text=string.format("%ds",State.maxTimer)
+slVal.Font=Enum.Font.GothamBlack; slVal.TextSize=12
+slVal.TextColor3=Color3.fromRGB(220,180,255); slVal.TextXAlignment=Enum.TextXAlignment.Right; slVal.ZIndex=7
+
+local trackBG=Instance.new("Frame",sliderCard)
+trackBG.Size=UDim2.new(1,-20,0,8); trackBG.Position=UDim2.new(0,10,0,34)
+trackBG.BackgroundColor3=Color3.fromRGB(22,10,48); trackBG.BorderSizePixel=0; trackBG.ZIndex=6
+local tbc=Instance.new("UICorner",trackBG); tbc.CornerRadius=UDim.new(1,0)
+local tbs=Instance.new("UIStroke",trackBG)
+tbs.Color=Color3.fromRGB(70,30,140); tbs.Thickness=1; tbs.Transparency=0.5
+tbs.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+local trackFill=Instance.new("Frame",trackBG)
+local fillPct = (State.maxTimer - 1) / 7
+trackFill.Size=UDim2.new(fillPct,0,1,0); trackFill.BackgroundColor3=Color3.fromRGB(160,80,255)
+trackFill.BorderSizePixel=0; trackFill.ZIndex=7
+local tfc=Instance.new("UICorner",trackFill); tfc.CornerRadius=UDim.new(1,0)
+ApplyAnimatedGradient(trackFill, 0.012, ColorSequence.new{
+    ColorSequenceKeypoint.new(0,    Color3.fromRGB(100, 30, 220)),
+    ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(220, 140, 255)),
+    ColorSequenceKeypoint.new(1,    Color3.fromRGB(100, 30, 220)),
+})
+
+local thumb=Instance.new("Frame",trackBG)
+thumb.Size=UDim2.fromOffset(16,16); thumb.AnchorPoint=Vector2.new(0.5,0.5)
+thumb.Position=UDim2.new(fillPct,0,0.5,0)
+thumb.BackgroundColor3=Color3.fromRGB(220,170,255); thumb.BorderSizePixel=0; thumb.ZIndex=9
+local thc=Instance.new("UICorner",thumb); thc.CornerRadius=UDim.new(1,0)
+local ths=Instance.new("UIStroke",thumb)
+ths.Color=Color3.fromRGB(255,230,255); ths.Thickness=1.5; ths.Transparency=0.1
+ths.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+local thumbGlow = Instance.new("ImageLabel", thumb)
+thumbGlow.AnchorPoint = Vector2.new(0.5, 0.5)
+thumbGlow.Position = UDim2.new(0.5, 0, 0.5, 0)
+thumbGlow.Size = UDim2.new(2.4, 0, 2.4, 0)
+thumbGlow.BackgroundTransparency = 1
+thumbGlow.Image = "rbxassetid://5028857084"
+thumbGlow.ImageColor3 = Color3.fromRGB(200, 130, 255)
+thumbGlow.ImageTransparency = 0.4
+thumbGlow.ScaleType = Enum.ScaleType.Slice
+thumbGlow.SliceCenter = Rect.new(24, 24, 276, 276)
+thumbGlow.ZIndex = 8
+
+local sliderBtn=Instance.new("TextButton",trackBG)
+sliderBtn.Size=UDim2.new(1,0,3,0); sliderBtn.Position=UDim2.new(0,0,-1,0)
+sliderBtn.BackgroundTransparency=1; sliderBtn.Text=""; sliderBtn.ZIndex=10
+
+local sliderDragging=false
+
+local function updateSlider(absX)
+    local tbAbs = trackBG.AbsolutePosition.X
+    local tbW   = trackBG.AbsoluteSize.X
+    local pct   = math.clamp((absX - tbAbs) / tbW, 0, 1)
+    local raw     = 1 + pct * 7
+    local snapped = math.round(raw)
+    snapped = math.clamp(snapped, 1, 8)
+    State.maxTimer = snapped
+    State.timer    = snapped
+    local p2 = (snapped - 1) / 7
+    Tween(trackFill, 0.15, {Size = UDim2.new(p2, 0, 1, 0)})
+    Tween(thumb, 0.15, {Position = UDim2.new(p2, 0, 0.5, 0)})
+    slVal.Text = string.format("%ds", snapped)
+    if timerValueLabel then timerValueLabel.Text = string.format("%ds", snapped) end
+    SaveConfig()
+end
+
+sliderBtn.MouseButton1Down:Connect(function() sliderDragging=true end)
+sliderBtn.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.Touch then sliderDragging=true end
+end)
+UIS.InputChanged:Connect(function(i)
+    if sliderDragging and (i.UserInputType==Enum.UserInputType.MouseMovement
+        or i.UserInputType==Enum.UserInputType.Touch) then
+        updateSlider(i.Position.X)
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1
+        or i.UserInputType==Enum.UserInputType.Touch then
+        sliderDragging=false
     end
 end)
 
-local discordClickBtn = Instance.new("TextButton", discordBar)
-discordClickBtn.Size = UDim2.new(1, 0, 1, 0)
-discordClickBtn.BackgroundTransparency = 1
-discordClickBtn.Text = ""
-discordClickBtn.ZIndex = 10
+-- ════════════════════════════════════
+--  CHIPS ROW PREMIUM
+-- ════════════════════════════════════
+local chipsY = CY
+nextY(40, 10)
 
-discordClickBtn.MouseButton1Click:Connect(function()
+local CHIP_GAP = 8
+local CHIP_W   = math.floor((INNER - CHIP_GAP*2) / 3)
+
+local function MakeChip(label, value, xOff, accentC)
+    accentC = accentC or Color3.fromRGB(120,55,210)
+    local chip=Instance.new("Frame",main)
+    chip.Size=UDim2.new(0,CHIP_W,0,40); chip.Position=UDim2.new(0,PAD+xOff,0,chipsY)
+    chip.BackgroundColor3=Color3.fromRGB(16,9,32); chip.BorderSizePixel=0; chip.ZIndex=5
+    chip.ClipsDescendants = true
+    local cc=Instance.new("UICorner",chip); cc.CornerRadius=UDim.new(0,11)
+    local cg=Instance.new("UIGradient",chip)
+    cg.Color=ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(28,14,60)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(12,6,26)),
+    }
+    cg.Rotation=120
+    local cs=Instance.new("UIStroke",chip)
+    cs.Color=accentC; cs.Thickness=1; cs.Transparency=0.4
+    cs.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+    local topBar = Instance.new("Frame", chip)
+    topBar.Size = UDim2.new(1, 0, 0, 2)
+    topBar.BackgroundColor3 = accentC
+    topBar.BorderSizePixel = 0
+    topBar.ZIndex = 6
+
+    local lbl=Instance.new("TextLabel",chip)
+    lbl.Size=UDim2.new(1,0,0,14); lbl.Position=UDim2.new(0,0,0,5)
+    lbl.BackgroundTransparency=1; lbl.Text=label
+    lbl.Font=Enum.Font.GothamBold; lbl.TextSize=8
+    lbl.TextColor3=Color3.fromRGB(120,65,200); lbl.ZIndex=6
+
+    local val=Instance.new("TextLabel",chip)
+    val.Size=UDim2.new(1,0,0,18); val.Position=UDim2.new(0,0,0,20)
+    val.BackgroundTransparency=1; val.Text=value
+    val.Font=Enum.Font.GothamBlack; val.TextSize=13
+    val.TextColor3=Color3.fromRGB(220,180,255); val.ZIndex=6
+
+    return val
+end
+
+timerValueLabel = MakeChip("◆ TIMER",  string.format("%ds",State.maxTimer), 0,              Color3.fromRGB(140,60,255))
+statusChipLabel = MakeChip("◆ STATUS", "OFF",  CHIP_W+CHIP_GAP,   Color3.fromRGB(60,200,120))
+bindChipLabel   = MakeChip("◆ BIND",   State.keybind.Name:sub(1,3), (CHIP_W+CHIP_GAP)*2, Color3.fromRGB(220,80,255))
+
+MakeSep(CY - 2)
+CY += 8
+
+-- ════════════════════════════════════
+--  DISCORD BAR PREMIUM
+-- ════════════════════════════════════
+local discY = CY
+nextY(40, 8)
+
+local discBar=Instance.new("Frame",main)
+discBar.Size=UDim2.new(0,INNER,0,40); discBar.Position=UDim2.new(0,PAD,0,discY)
+discBar.BackgroundColor3=Color3.fromRGB(40,16,100); discBar.BorderSizePixel=0; discBar.ZIndex=5
+discBar.ClipsDescendants = true
+local dc=Instance.new("UICorner",discBar); dc.CornerRadius=UDim.new(0,12)
+ApplyAnimatedGradient(discBar, 0.008, ColorSequence.new{
+    ColorSequenceKeypoint.new(0,    Color3.fromRGB(45, 16, 120)),
+    ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(110, 50, 220)),
+    ColorSequenceKeypoint.new(1,    Color3.fromRGB(45, 16, 120)),
+})
+local ds=Instance.new("UIStroke",discBar)
+ds.Color=Color3.fromRGB(160,90,255); ds.Thickness=1.3; ds.Transparency=0.2
+ds.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+local discDot=Instance.new("Frame",discBar)
+discDot.Size=UDim2.fromOffset(8,8); discDot.Position=UDim2.new(0,12,0.5,-4)
+discDot.BackgroundColor3=Color3.fromRGB(220,180,255); discDot.BorderSizePixel=0; discDot.ZIndex=8
+local ddc=Instance.new("UICorner",discDot); ddc.CornerRadius=UDim.new(1,0)
+
+task.spawn(function()
+    while discDot and discDot.Parent do
+        TweenService:Create(discDot,TweenInfo.new(1,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,0,true),{
+            BackgroundTransparency = 0.5
+        }):Play()
+        task.wait(2)
+    end
+end)
+
+local discText=Instance.new("TextLabel",discBar)
+discText.Size=UDim2.new(1,-72,1,0); discText.Position=UDim2.new(0,26,0,0)
+discText.BackgroundTransparency=1; discText.Text="✦ discord.gg/albuxhub"
+discText.Font=Enum.Font.GothamBold; discText.TextSize=12
+discText.TextColor3=Color3.fromRGB(255,255,255)
+discText.TextXAlignment=Enum.TextXAlignment.Left; discText.ZIndex=8
+
+local copyBtn=Instance.new("TextButton",discBar)
+copyBtn.Size=UDim2.fromOffset(54,26); copyBtn.Position=UDim2.new(1,-62,0.5,-13)
+copyBtn.BackgroundColor3=Color3.fromRGB(80,30,180); copyBtn.BorderSizePixel=0
+copyBtn.Text="COPY"; copyBtn.TextColor3=Color3.fromRGB(255,230,255)
+copyBtn.Font=Enum.Font.GothamBold; copyBtn.TextSize=10; copyBtn.ZIndex=9
+copyBtn.AutoButtonColor=false
+local cpyc=Instance.new("UICorner",copyBtn); cpyc.CornerRadius=UDim.new(0,8)
+local cpys=Instance.new("UIStroke",copyBtn)
+cpys.Color=Color3.fromRGB(180,110,255); cpys.Thickness=1; cpys.Transparency=0.2
+cpys.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+copyBtn.MouseEnter:Connect(function()
+    Tween(copyBtn,.15,{BackgroundColor3=Color3.fromRGB(110,45,225)})
+end)
+copyBtn.MouseLeave:Connect(function()
+    Tween(copyBtn,.15,{BackgroundColor3=Color3.fromRGB(80,30,180)})
+end)
+copyBtn.MouseButton1Click:Connect(function()
     if setclipboard then
         setclipboard("discord.gg/albuxhub")
-        discordText.Text = "Copied!"
-        task.wait(1.5)
-        discordText.Text = "discord.gg/albuxhub"
+        copyBtn.Text="✓"; Tween(copyBtn,.15,{BackgroundColor3=Color3.fromRGB(38,170,80)})
+        task.wait(1.5); copyBtn.Text="COPY"; Tween(copyBtn,.15,{BackgroundColor3=Color3.fromRGB(80,30,180)})
     end
 end)
 
-discordClickBtn.MouseEnter:Connect(function()
-    TweenService:Create(discordBar, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(38, 18, 65)}):Play()
-    TweenService:Create(discordBarStroke, TweenInfo.new(0.18), {Transparency = 0.15}):Play()
-end)
-discordClickBtn.MouseLeave:Connect(function()
-    TweenService:Create(discordBar, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(20, 11, 38)}):Play()
-    TweenService:Create(discordBarStroke, TweenInfo.new(0.18), {Transparency = 0.55}):Play()
-end)
+-- ════════════════════════════════════
+--  CRÉDITOS LEGÍVEIS
+-- ════════════════════════════════════
+local credY = CY
+local cred=Instance.new("TextLabel",main)
+cred.Size=UDim2.new(1,0,0,16); cred.Position=UDim2.new(0,0,0,credY)
+cred.BackgroundTransparency=1; cred.Text="✦ ALBUX HUB  ·  DESYNC V6  ·  PREMIUM ✦"
+cred.Font=Enum.Font.GothamBold; cred.TextSize=11
+cred.TextColor3=Color3.fromRGB(200,150,255); cred.ZIndex=5
 
-local shadow = Instance.new("ImageLabel", main)
-shadow.BackgroundTransparency = 1
-shadow.AnchorPoint = Vector2.new(0.5, 0.5)
-shadow.Position = UDim2.new(0.5, 0, 0.5, 10)
-shadow.Size = UDim2.new(1, 50, 1, 50)
-shadow.Image = "rbxassetid://1316045217"
-shadow.ImageColor3 = Color3.fromRGB(80, 20, 180)
-shadow.ImageTransparency = 0.65
-shadow.ScaleType = Enum.ScaleType.Slice
-shadow.SliceCenter = Rect.new(10, 10, 118, 118)
-shadow.ZIndex = -2
+-- glow sutil no texto
+local credStroke = Instance.new("UIStroke", cred)
+credStroke.Color = Color3.fromRGB(80, 30, 160)
+credStroke.Thickness = 1
+credStroke.Transparency = 0.6
 
---// CORE LOGIC
-task.spawn(function()
-    while true do
-        local isStealing = lp:GetAttribute("Stealing") == true
+-- redimensiona main + wrap (altura corrigida)
+local finalH = credY + 22
+main.Size = UDim2.new(1, -20, 0, finalH)
+wrap.Size = UDim2.new(0, 320, 0, finalH + 20)
 
-        if not isStealing then
-            State.stealing = false
-            State.desync = false
-            State.timer = 5
-            statusText.Text = "Waiting..."
-            statusText.TextColor3 = Color3.fromRGB(200, 200, 200)
-            statusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
-        else
-            State.stealing = true
-            State.desync = true
+-- ════════════════════════════════════
+--  BUTTON LOGIC
+-- ════════════════════════════════════
+manualBtn.MouseButton1Click:Connect(doRollback)
 
-            task.wait(0.5)
-
-            if lp:GetAttribute("Stealing") == true then
-                doRollback()
-            end
-
-            while State.timer > 0 and lp:GetAttribute("Stealing") == true do
-                statusText.Text = string.format("%.1fs", State.timer)
-                statusText.TextColor3 = Color3.fromRGB(190, 120, 255)
-                statusDot.BackgroundColor3 = Color3.fromRGB(190, 120, 255)
-                task.wait(0.1)
-                State.timer = State.timer - 0.1
-            end
-
-            if lp:GetAttribute("Stealing") == true then
-                State.desync = false
-                statusText.Text = "Syncing..."
-                statusText.TextColor3 = Color3.fromRGB(150, 80, 255)
-
-                local char = lp.Character
-                local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local p = hrp.CFrame
-                    hrp.CFrame = p * CFrame.new(0, 1000, 0)
-                    task.wait(0.05)
-                    hrp.CFrame = p
-                end
-
-                task.wait(0.15)
-                State.desync = true
-                State.timer = 5
-            end
-        end
-
-        task.wait(0.05)
+local desyncOn = true
+desyncBtn.MouseButton1Click:Connect(function()
+    desyncOn = not desyncOn
+    State.enabled = desyncOn
+    if desyncOn then
+        desyncBtn.Text="⚙ DESYNC  ——  ON"; desyncBtn.TextColor3=Color3.fromRGB(140,255,180)
+        desyncPill.BackgroundColor3=Color3.fromRGB(60,220,130)
+        Tween(desyncStroke,.2,{Color=Color3.fromRGB(60,220,130),Transparency=0.4})
+        if statusChipLabel then statusChipLabel.TextColor3=Color3.fromRGB(140,255,180) end
+    else
+        desyncBtn.Text="⚙ DESYNC  ——  OFF"; desyncBtn.TextColor3=Color3.fromRGB(255,100,100)
+        desyncPill.BackgroundColor3=Color3.fromRGB(230,60,60)
+        Tween(desyncStroke,.2,{Color=Color3.fromRGB(220,50,50),Transparency=0.35})
+        State.desync=false; State.stealing=false
+        if statusText  then statusText.Text="Disabled"; statusText.TextColor3=Color3.fromRGB(255,90,90) end
+        if statusDot   then statusDot.BackgroundColor3=Color3.fromRGB(255,60,60) end
+        if statusChipLabel then statusChipLabel.Text="OFF"; statusChipLabel.TextColor3=Color3.fromRGB(255,100,100) end
     end
 end)
 
---// POSITION SAVER
+-- ════════════════════════════════════
+--  INPUT
+-- ════════════════════════════════════
+UIS.InputBegan:Connect(function(input, gpe)
+    if State.listeningForKey then
+        if input.UserInputType==Enum.UserInputType.Keyboard then
+            if input.KeyCode==Enum.KeyCode.Escape then
+                State.listeningForKey=false; refreshKB()
+                Tween(keybindStroke,.15,{Color=Color3.fromRGB(200,140,255),Transparency=0.1}); return
+            end
+            State.keybind=input.KeyCode; State.listeningForKey=false; refreshKB()
+            Tween(keybindStroke,.15,{Color=Color3.fromRGB(200,140,255),Transparency=0.1}); SaveConfig()
+        end; return
+    end
+    if gpe then return end
+    if input.KeyCode==State.keybind then doRollback() end
+end)
+
+-- ════════════════════════════════════
+--  POSITION SAVER
+-- ════════════════════════════════════
 task.spawn(function()
     while true do
-        local char = lp.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and (not State.stealing or not State.desync) then
-            lastSafePos = hrp.Position
-        end
+        local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+        if hrp and (not State.stealing or not State.desync) then lastSafePos=hrp.Position end
         task.wait(0.1)
     end
 end)
 
---// KEYBIND LISTENER
-UIS.InputBegan:Connect(function(input, gpe)
-    if State.listeningForKey then
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            if input.KeyCode == Enum.KeyCode.Escape then
-                State.listeningForKey = false
-                local kn = State.keybind.Name
-                keybindBadge.Text = #kn > 3 and kn:sub(1, 3) or kn
-                TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(80, 30, 160)}):Play()
-                TweenService:Create(keybindStroke, TweenInfo.new(0.18), {Color = Color3.fromRGB(160, 80, 255)}):Play()
-                return
+-- ════════════════════════════════════
+--  MAIN LOOP
+-- ════════════════════════════════════
+task.spawn(function()
+    while true do
+        local isStealing=lp:GetAttribute("Stealing")==true
+
+        if not isStealing or not State.enabled then
+            State.stealing=false; State.desync=false; State.isDelaying=false
+            State.timer=State.maxTimer
+            if statusText then
+                statusText.Text  = State.enabled and "Waiting..." or "Disabled"
+                statusText.TextColor3 = State.enabled and Color3.fromRGB(200,200,225) or Color3.fromRGB(255,90,90)
+            end
+            if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(255,60,60) end
+            if statusChipLabel and State.enabled then
+                statusChipLabel.Text="OFF"; statusChipLabel.TextColor3=Color3.fromRGB(255,100,100)
             end
 
-            State.keybind = input.KeyCode
-            State.listeningForKey = false
+        elseif not State.isDelaying then
+            State.isDelaying=true; State.stealing=true; State.desync=true
 
-            local keyName = input.KeyCode.Name
-            keybindBadge.Text = #keyName > 3 and keyName:sub(1, 3) or keyName
+            if statusChipLabel then
+                statusChipLabel.Text="ON"; statusChipLabel.TextColor3=Color3.fromRGB(140,255,180)
+            end
+            if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(180,100,255) end
 
-            TweenService:Create(keybindBadge, TweenInfo.new(0.18), {BackgroundColor3 = Color3.fromRGB(80, 30, 160)}):Play()
-            TweenService:Create(keybindStroke, TweenInfo.new(0.18), {Color = Color3.fromRGB(160, 80, 255)}):Play()
+            task.wait(0.5)
+            if lp:GetAttribute("Stealing")==true then doRollback() end
 
-            saveConfig()
+            while State.timer>0 and lp:GetAttribute("Stealing")==true and State.enabled do
+                if statusText then
+                    statusText.Text=string.format("%.1fs",State.timer)
+                    statusText.TextColor3=Color3.fromRGB(195,135,255)
+                end
+                if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(180,100,255) end
+                task.wait(0.1); State.timer=math.max(0,State.timer-0.1)
+            end
+
+            if lp:GetAttribute("Stealing")==true and State.enabled then
+                State.desync=false
+                if statusText then statusText.Text="Syncing..."; statusText.TextColor3=Color3.fromRGB(160,90,255) end
+                local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local cur=hrp.CFrame; hrp.CFrame=cur*CFrame.new(0,1000,0)
+                    task.wait(0.05); hrp.CFrame=cur
+                end
+                task.wait(0.15); doRollback(); task.wait(0.05); State.desync=true
+            end
+            State.isDelaying=false
         end
-        return
-    end
-
-    if gpe then return end
-    if input.KeyCode == State.keybind then doRollback() end
-end)
-
-manualBtn.MouseButton1Click:Connect(doRollback)
-
-desyncToggleBtn.MouseButton1Click:Connect(function()
-    State.desyncEnabled = not State.desyncEnabled
-    if State.desyncEnabled then
-        desyncToggleBtn.Text = "DESYNC  —  ON"
-        desyncToggleBtn.TextColor3 = Color3.fromRGB(150, 255, 180)
-        desyncStroke.Color = Color3.fromRGB(70, 180, 110)
-    else
-        desyncToggleBtn.Text = "DESYNC  —  OFF"
-        desyncToggleBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
-        desyncStroke.Color = Color3.fromRGB(180, 50, 50)
-        State.desync = false
-        State.stealing = false
-        statusText.Text = "Disabled"
-        statusText.TextColor3 = Color3.fromRGB(255, 100, 100)
-        statusDot.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+        task.wait(0.05)
     end
 end)
 
-saveBtn.MouseButton1Click:Connect(function()
-    local char = lp.Character
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        State.savedPosition = char.HumanoidRootPart.CFrame
-        saveBtn.Text = "Position Saved!"
-        task.wait(1.5)
-        saveBtn.Text = "SAVE POSITION"
+-- ════════════════════════════════════
+--  AUTO-ROLLBACK ON TOOL PICKUP
+-- ════════════════════════════════════
+task.spawn(function()
+    local last=nil
+    while true do
+        local char=lp.Character
+        local tool=char and char:FindFirstChildOfClass("Tool")
+        local n=tool and tool.Name or nil
+        if n and n~=last and n~="Flying Carpet" then task.wait(0.05); doRollback() end
+        last=n; task.wait(0.1)
     end
 end)
 
---// DRAG
-local dragging, dragStart, startPos
-main.InputBegan:Connect(function(input)
-    if State.listeningForKey then return end
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true; dragStart = input.Position; startPos = main.Position
+-- ════════════════════════════════════
+--  DRAG (no wrap)
+-- ════════════════════════════════════
+local drag,dStart,dOrigin=false,nil,nil
+main.InputBegan:Connect(function(i)
+    if sliderDragging or State.listeningForKey then return end
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        drag=true; dStart=i.Position; dOrigin=wrap.Position
     end
 end)
-UIS.InputChanged:Connect(function(input)
-    if dragging then
-        local delta = input.Position - dragStart
-        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+UIS.InputChanged:Connect(function(i)
+    if drag and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+        local d=i.Position-dStart
+        wrap.Position=UDim2.new(dOrigin.X.Scale,dOrigin.X.Offset+d.X,dOrigin.Y.Scale,dOrigin.Y.Offset+d.Y)
     end
 end)
-UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-        saveConfig()
+UIS.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        if drag then
+            drag=false
+            SaveConfig()
+        end
     end
 end)
 
-print("[ALBUX DESYNC V5] Loaded")
+print("[Albux Hub V6] Loaded — bind: "..State.keybind.Name.." — PREMIUM EDITION ✦")
