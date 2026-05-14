@@ -1,17 +1,17 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 
   local HWIDs_Autorizados = {
-    "e25d0b1c22d02c4b8602eb75c9b3780d6aec7cf6309e206a908db7b7ed8a7b97",
-    "e8c655423b756ddd56687026077f3c8b7fa76e3af6a24d77522b52c539216d33",
-    "e7acbca7f86916bd22825feb20ea88ca6bd5cdf168747a1d3238fbbd98bbdd07",
-    "0aacdafe4fd20c70647f7efc9ff865905691d8258a1bb65d0ebc3091c1eba4c6",
-    "950ba22b27397008051ee19e385254d912812cbb1c4b77dd23b319f4454113a2",
-    "c09622852499faefa5a5f93d42e8aafb79df8430136f826c0d051c07c2dc881f",
-    "2c6aff28d064dc884a95722fc6a34f251dcccd1b186b45e5da1bf10d25327f9e",
-    "e383bd403c3fca227a17d39efab6f46c05a4c373510e9030f200b0f90af37fa5",
-    "5bfdc05d623ea2363cdcadea31a1da47c3534631a7eddafdbbc5115a3b46cdc0",
-    "4a77db7556f7e12ac20efdd2356d9b43aa745e4c8fea7169aca3918f87e2a178",
-    "8f20926e103e523fb1a45e520a549af3097e8bfedc3e5c31c341ec2acbe4793d",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
     "a",
 }
 
