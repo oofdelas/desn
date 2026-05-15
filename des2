@@ -62,56 +62,63 @@ game:GetService("StarterGui"):SetCore("SendNotification", {
 
 print("Script iniciado com sucesso!")
 
-local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
+local Players     = game:GetService("Players")
+local UIS         = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
+local TweenService= game:GetService("TweenService")
+local RunService  = game:GetService("RunService")
+local Workspace   = game:GetService("Workspace")
 
 local lp = Players.LocalPlayer
 if not raknet then warn("[Albux Hub V6] raknet not found!") return end
 
 local State = {
-	desync = false,
-	stealing = false,
-	timer = 5,
-	maxTimer = 5,
-	isDelaying = false,
-	enabled = true,
-	listeningForKey = false,
-	keybind = Enum.KeyCode.R,
-	method = 1,
-	showServerPos = true,
-	minimized = false,
+	desync           = false,
+	stealing         = false,
+	timer            = 5,
+	maxTimer         = 5,
+	isDelaying       = false,
+	enabled          = true,
+	listeningForKey  = false,
+	keybind          = Enum.KeyCode.R,
+	method           = 1,
+	showServerPos    = true,
+	minimized        = false,
 }
 
-local lastSafePos = nil
-local freezePos = nil
+local lastSafePos      = nil
+local freezePos        = nil
 local lastFreezeUpdate = 0
-local FREEZE_INTERVAL = 4
+local FREEZE_INTERVAL  = 4
 
 local statusText, statusDot, keybindBadge, keybindStroke, main, wrap
 local timerValueLabel, bindChipLabel, statusChipLabel
 local sliderCard, nextLbl, methodBtnObj
 local applyMethodUI
 
-local BALL_COLOR = Color3.fromRGB(180, 80, 255)
-local VISUAL_Y_OFFSET = 0
+local BALL_COLOR     = Color3.fromRGB(180, 80, 255)
+local VISUAL_Y_OFFSET= 0
 
 local visualPart = nil
-local visualGui = nil
+local visualGui  = nil
 local visualText = nil
-local serverPos = nil
+local serverPos  = nil
+
+-- Method descriptions
+local methodDescriptions = {
+	"Teleports you back to your saved position after the timer.",
+	"Same as Simple, but also resets your speed on rollback.",
+	"Freezes your server position. No timer, always active.",
+}
 
 local function destroyVisualizer()
 	if visualPart then
 		pcall(function() visualPart:Destroy() end)
 		visualPart = nil
 	end
-	visualGui = nil
+	visualGui  = nil
 	visualText = nil
-	serverPos = nil
+	serverPos  = nil
 end
 
 local function attachVisualizer(char)
@@ -138,8 +145,8 @@ local function attachVisualizer(char)
 	visualPart.CFrame       = CFrame.new(serverPos + Vector3.new(0, VISUAL_Y_OFFSET, 0))
 	visualPart.Parent       = Workspace
 
-	local glow = Instance.new("PointLight", visualPart)
-	glow.Color = BALL_COLOR; glow.Range = 14; glow.Brightness = 2.5
+	local glow      = Instance.new("PointLight", visualPart)
+	glow.Color      = BALL_COLOR; glow.Range = 14; glow.Brightness = 2.5
 
 	visualGui             = Instance.new("BillboardGui", visualPart)
 	visualGui.Name        = "DesyncGui"
@@ -214,11 +221,11 @@ task.spawn(function()
 end)
 
 -- ════════════════════════════════════
--- ROLLBACK
+--              ROLLBACK
 -- ════════════════════════════════════
 local function doRollback()
 	local char = lp.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return end
 
 	serverPos = hrp.Position
@@ -237,7 +244,7 @@ local function doRollback()
 	elseif State.method == 3 then
 		if not freezePos then freezePos = hrp.Position end
 		hrp.CFrame = CFrame.new(freezePos)
-		serverPos = freezePos
+		serverPos  = freezePos
 		return
 	end
 
@@ -258,7 +265,7 @@ pcall(function()
 				if os.clock() - lastFreezeUpdate >= FREEZE_INTERVAL then
 					lastFreezeUpdate = os.clock()
 					local char = lp.Character
-					local hrp = char and char:FindFirstChild("HumanoidRootPart")
+					local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 					if hrp then
 						freezePos = hrp.Position
 						serverPos = freezePos
@@ -296,12 +303,12 @@ end)
 
 local function Tween(obj, t, props, style, dir)
 	style = style or Enum.EasingStyle.Quart
-	dir = dir or Enum.EasingDirection.Out
+	dir   = dir   or Enum.EasingDirection.Out
 	TweenService:Create(obj, TweenInfo.new(t, style, dir), props):Play()
 end
 
 local function AnimGradient(obj, speed, colors)
-	speed = speed or 0.008
+	speed  = speed or 0.008
 	colors = colors or ColorSequence.new{
 		ColorSequenceKeypoint.new(0,    Color3.fromRGB( 80, 20, 200)),
 		ColorSequenceKeypoint.new(0.25, Color3.fromRGB(200,100, 255)),
@@ -329,15 +336,15 @@ if not isfolder(CFG_FOLDER) then makefolder(CFG_FOLDER) end
 local function SaveConfig()
 	pcall(function()
 		writefile(CFG_FILE, HttpService:JSONEncode({
-			X         = wrap.Position.X.Scale,
-			XO        = wrap.Position.X.Offset,
-			Y         = wrap.Position.Y.Scale,
-			YO        = wrap.Position.Y.Offset,
-			Keybind   = State.keybind.Name,
-			MaxTimer  = State.maxTimer,
-			Method    = State.method,
-			ShowServer= State.showServerPos,
-			Minimized = State.minimized,
+			X          = wrap.Position.X.Scale,
+			XO         = wrap.Position.X.Offset,
+			Y          = wrap.Position.Y.Scale,
+			YO         = wrap.Position.Y.Offset,
+			Keybind    = State.keybind.Name,
+			MaxTimer   = State.maxTimer,
+			Method     = State.method,
+			ShowServer = State.showServerPos,
+			Minimized  = State.minimized,
 		}))
 	end)
 end
@@ -350,24 +357,24 @@ local function LoadConfig()
 				local kok, kc = pcall(function() return Enum.KeyCode[d.Keybind] end)
 				if kok and kc then State.keybind = kc end
 			end
-			if d.MaxTimer  then State.maxTimer = math.clamp(d.MaxTimer,1,8); State.timer = State.maxTimer end
-			if d.Method    then State.method   = math.clamp(d.Method,1,3) end
+			if d.MaxTimer   then State.maxTimer = math.clamp(d.MaxTimer,1,8); State.timer = State.maxTimer end
+			if d.Method     then State.method   = math.clamp(d.Method,1,3) end
 			if d.ShowServer ~= nil then State.showServerPos = d.ShowServer end
-			if d.Minimized  ~= nil then State.minimized     = d.Minimized  end
+			if d.Minimized  ~= nil then State.minimized     = d.Minimized end
 			return UDim2.new(d.X or 0.5, d.XO or -160, d.Y or 0.3, d.YO or 0)
 		end
 	end
 	return UDim2.new(0.5, -160, 0.3, 0)
 end
 
-local savedPos   = LoadConfig()
+local savedPos    = LoadConfig()
 local methodNames = {"SIMPLE", "VELOCITY", "FREEZE"}
 
 -- Cores por método
 local methodColors = {
-	Color3.fromRGB(80,  200, 120),  -- SIMPLE   → verde
-	Color3.fromRGB(80,  170, 255),  -- VELOCITY → azul
-	Color3.fromRGB(255, 140,  60),  -- FREEZE   → laranja
+	Color3.fromRGB(80, 200, 120),   -- SIMPLE   → verde
+	Color3.fromRGB(80, 170, 255),   -- VELOCITY → azul
+	Color3.fromRGB(255, 140, 60),   -- FREEZE   → laranja
 }
 local methodTextColors = {
 	Color3.fromRGB(160, 255, 190),
@@ -376,7 +383,7 @@ local methodTextColors = {
 }
 
 -- ════════════════════════════════════
--- GUI SETUP
+--             GUI SETUP
 -- ════════════════════════════════════
 local gui = Instance.new("ScreenGui")
 gui.Name = "AlbuxHub_V6"; gui.ResetOnSpawn = false
@@ -443,8 +450,8 @@ end)
 task.spawn(function()
 	while main and main.Parent do
 		TweenService:Create(mainStroke, TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.4, Thickness=2.8}):Play()
-		TweenService:Create(glowMid,   TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.7, Thickness=6}):Play()
-		TweenService:Create(glowOuter, TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.9, Thickness=12}):Play()
+		TweenService:Create(glowMid,    TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.7, Thickness=6}):Play()
+		TweenService:Create(glowOuter,  TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.9, Thickness=12}):Play()
 		break
 	end
 end)
@@ -520,7 +527,7 @@ iconImg.Image="rbxassetid://132707392197941"; iconImg.ScaleType=Enum.ScaleType.F
 
 task.spawn(function()
 	TweenService:Create(iconStroke,TweenInfo.new(1.4,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0,Thickness=2.4}):Play()
-	TweenService:Create(iconGlow,  TweenInfo.new(1.4,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{ImageTransparency=0.2,Size=UDim2.new(1,50,1,50)}):Play()
+	TweenService:Create(iconGlow, TweenInfo.new(1.4,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{ImageTransparency=0.2,Size=UDim2.new(1,50,1,50)}):Play()
 end)
 
 local titleLbl=Instance.new("TextLabel",header)
@@ -604,7 +611,7 @@ dotGlow.ImageTransparency=0.3; dotGlow.ScaleType=Enum.ScaleType.Slice; dotGlow.S
 task.spawn(function()
 	while statusDot and statusDot.Parent do
 		TweenService:Create(statusDot,TweenInfo.new(0.9,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,0,true),{Size=UDim2.fromOffset(14,14),Position=UDim2.new(0,12.5,0.5,-7)}):Play()
-		TweenService:Create(dotGlow,  TweenInfo.new(0.9,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,0,true),{ImageTransparency=0.55,Size=UDim2.fromOffset(38,38)}):Play()
+		TweenService:Create(dotGlow, TweenInfo.new(0.9,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,0,true),{ImageTransparency=0.55,Size=UDim2.fromOffset(38,38)}):Play()
 		task.wait(1.8)
 	end
 end)
@@ -651,7 +658,7 @@ local function MakeBtn(labelText,yPos,accentColor,textColor)
 		Tween(pill,.2,{Size=UDim2.fromOffset(3,22),Position=UDim2.new(0,10,0.5,-11)})
 	end)
 	btn.MouseButton1Down:Connect(function() Tween(frame,.07,{BackgroundColor3=Color3.fromRGB(45,22,90)}) end)
-	btn.MouseButton1Up:Connect(function()   Tween(frame,.12,{BackgroundColor3=Color3.fromRGB(32,16,68)}) end)
+	btn.MouseButton1Up:Connect(function() Tween(frame,.12,{BackgroundColor3=Color3.fromRGB(32,16,68)}) end)
 	return btn,frame,fs,pill
 end
 
@@ -709,14 +716,14 @@ keybindBadge.MouseButton1Click:Connect(function()
 end)
 
 -- ── DESYNC btn ───────────────────────────────────────────────────────────────
-local desyncBtn,desyncFrame,desyncStroke,desyncPill=MakeBtn("DESYNC  ●  ON",CY,Color3.fromRGB(60,220,130),Color3.fromRGB(140,255,180))
+local desyncBtn,desyncFrame,desyncStroke,desyncPill=MakeBtn("DESYNC ● ON",CY,Color3.fromRGB(60,220,130),Color3.fromRGB(140,255,180))
 nextY(44,10)
 
 -- ════════════════════════════════════════════════════════════════════════════
--- ██  BOTÃO METHOD – DESIGN TOTALMENTE DIFERENTE  ██
+-- ██ BOTÃO METHOD – DESIGN TOTALMENTE DIFERENTE ██
 -- ════════════════════════════════════════════════════════════════════════════
 local methodBtnY = CY
-nextY(50, 10)   -- ocupa 50 px de altura
+nextY(50, 10) -- ocupa 50 px de altura
 
 -- container externo com borda gradiente animada
 local methodOuter = Instance.new("Frame", main)
@@ -731,8 +738,8 @@ Instance.new("UICorner", methodOuter).CornerRadius = UDim.new(0, 14)
 -- borda neon animada (rotação de cor)
 local methodOuterStroke = Instance.new("UIStroke", methodOuter)
 methodOuterStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-methodOuterStroke.Thickness  = 2.5
-methodOuterStroke.Transparency = 0
+methodOuterStroke.Thickness       = 2.5
+methodOuterStroke.Transparency    = 0
 local methodBorderGrad = Instance.new("UIGradient", methodOuterStroke)
 methodBorderGrad.Color = ColorSequence.new{
 	ColorSequenceKeypoint.new(0,   methodColors[State.method]),
@@ -751,8 +758,8 @@ end)
 -- fundo gradiente do botão
 local methodBg = Instance.new("UIGradient", methodOuter)
 methodBg.Color = ColorSequence.new{
-	ColorSequenceKeypoint.new(0,   Color3.fromRGB(22, 10, 50)),
-	ColorSequenceKeypoint.new(1,   Color3.fromRGB(10,  5, 22)),
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 10, 50)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 5, 22)),
 }
 methodBg.Rotation = 90
 
@@ -767,15 +774,15 @@ Instance.new("UICorner", methodPill).CornerRadius = UDim.new(0, 4)
 
 -- label esquerdo fixo "METHOD"
 local methodCaption = Instance.new("TextLabel", methodOuter)
-methodCaption.Size               = UDim2.new(0, 70, 1, 0)
-methodCaption.Position           = UDim2.new(0, 22, 0, 0)
+methodCaption.Size                   = UDim2.new(0, 70, 1, 0)
+methodCaption.Position               = UDim2.new(0, 22, 0, 0)
 methodCaption.BackgroundTransparency = 1
-methodCaption.Text               = "METHOD"
-methodCaption.Font               = Enum.Font.GothamBold
-methodCaption.TextSize           = 9
-methodCaption.TextColor3         = Color3.fromRGB(140, 80, 220)
-methodCaption.TextXAlignment     = Enum.TextXAlignment.Left
-methodCaption.ZIndex             = 8
+methodCaption.Text                   = "METHOD"
+methodCaption.Font                   = Enum.Font.GothamBold
+methodCaption.TextSize               = 9
+methodCaption.TextColor3             = Color3.fromRGB(140, 80, 220)
+methodCaption.TextXAlignment         = Enum.TextXAlignment.Left
+methodCaption.ZIndex                 = 8
 
 -- badge colorido com o nome do método atual (direita)
 local methodBadge = Instance.new("Frame", methodOuter)
@@ -802,31 +809,31 @@ AnimGradient(methodBadge, 0.018,
 )
 
 local methodBadgeStroke = Instance.new("UIStroke", methodBadge)
-methodBadgeStroke.Color           = Color3.fromRGB(255,255,255)
-methodBadgeStroke.Thickness       = 1.2
-methodBadgeStroke.Transparency    = 0.5
-methodBadgeStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+methodBadgeStroke.Color          = Color3.fromRGB(255,255,255)
+methodBadgeStroke.Thickness      = 1.2
+methodBadgeStroke.Transparency   = 0.5
+methodBadgeStroke.ApplyStrokeMode= Enum.ApplyStrokeMode.Border
 
 local methodNameLbl = Instance.new("TextLabel", methodBadge)
-methodNameLbl.Size               = UDim2.new(1, 0, 1, 0)
+methodNameLbl.Size                   = UDim2.new(1, 0, 1, 0)
 methodNameLbl.BackgroundTransparency = 1
-methodNameLbl.Text               = methodNames[State.method]
-methodNameLbl.Font               = Enum.Font.GothamBlack
-methodNameLbl.TextSize           = 14
-methodNameLbl.TextColor3         = Color3.fromRGB(255, 255, 255)
-methodNameLbl.ZIndex             = 9
+methodNameLbl.Text                   = methodNames[State.method]
+methodNameLbl.Font                   = Enum.Font.GothamBlack
+methodNameLbl.TextSize               = 14
+methodNameLbl.TextColor3             = Color3.fromRGB(255, 255, 255)
+methodNameLbl.ZIndex                 = 9
 
 -- seta "▶" para indicar que é clicável
 local methodArrow = Instance.new("TextLabel", methodOuter)
-methodArrow.Size               = UDim2.fromOffset(28, 38)
-methodArrow.AnchorPoint        = Vector2.new(1, 0.5)
-methodArrow.Position           = UDim2.new(1, -8, 0.5, 0)
+methodArrow.Size                   = UDim2.fromOffset(28, 38)
+methodArrow.AnchorPoint            = Vector2.new(1, 0.5)
+methodArrow.Position               = UDim2.new(1, -8, 0.5, 0)
 methodArrow.BackgroundTransparency = 1
-methodArrow.Text               = "▶"
-methodArrow.Font               = Enum.Font.GothamBlack
-methodArrow.TextSize           = 20
-methodArrow.TextColor3         = Color3.fromRGB(200, 160, 255)
-methodArrow.ZIndex             = 9
+methodArrow.Text                   = "▶"
+methodArrow.Font                   = Enum.Font.GothamBlack
+methodArrow.TextSize               = 20
+methodArrow.TextColor3             = Color3.fromRGB(200, 160, 255)
+methodArrow.ZIndex                 = 9
 
 -- shine sweep
 local methodShine = Instance.new("Frame", methodOuter)
@@ -836,37 +843,37 @@ methodShine.BackgroundColor3= Color3.fromRGB(255,255,255)
 methodShine.BorderSizePixel = 0
 methodShine.ZIndex          = 7
 local methodShineG = Instance.new("UIGradient", methodShine)
-methodShineG.Transparency   = NumberSequence.new{
-	NumberSequenceKeypoint.new(0,   1),
+methodShineG.Transparency = NumberSequence.new{
+	NumberSequenceKeypoint.new(0, 1),
 	NumberSequenceKeypoint.new(0.5, 0.82),
-	NumberSequenceKeypoint.new(1,   1),
+	NumberSequenceKeypoint.new(1, 1),
 }
 
 -- botão invisível sobre tudo
 methodBtnObj = Instance.new("TextButton", methodOuter)
-methodBtnObj.Size               = UDim2.new(1, 0, 1, 0)
+methodBtnObj.Size                   = UDim2.new(1, 0, 1, 0)
 methodBtnObj.BackgroundTransparency = 1
-methodBtnObj.Text               = ""
-methodBtnObj.BorderSizePixel    = 0
-methodBtnObj.ZIndex             = 10
-methodBtnObj.AutoButtonColor    = false
+methodBtnObj.Text                   = ""
+methodBtnObj.BorderSizePixel        = 0
+methodBtnObj.ZIndex                 = 10
+methodBtnObj.AutoButtonColor        = false
 
 -- hover / press
 methodBtnObj.MouseEnter:Connect(function()
-	Tween(methodOuter,    .18, {BackgroundColor3 = Color3.fromRGB(22, 10, 50)})
+	Tween(methodOuter, .18, {BackgroundColor3 = Color3.fromRGB(22, 10, 50)})
 	Tween(methodOuterStroke, .18, {Thickness = 3.5})
-	Tween(methodArrow,    .18, {TextColor3 = Color3.fromRGB(255, 230, 255)})
-	Tween(methodPill,     .18, {Size = UDim2.fromOffset(5, 36), Position = UDim2.new(0, 10, 0.5, -18)})
-	Tween(methodBadge,    .18, {Size = UDim2.fromOffset(108, 34)})
+	Tween(methodArrow, .18, {TextColor3 = Color3.fromRGB(255, 230, 255)})
+	Tween(methodPill, .18, {Size = UDim2.fromOffset(5, 36), Position = UDim2.new(0, 10, 0.5, -18)})
+	Tween(methodBadge, .18, {Size = UDim2.fromOffset(108, 34)})
 	methodShine.Position = UDim2.new(0, -80, 0, 0)
 	Tween(methodShine, 0.55, {Position = UDim2.new(1, 20, 0, 0)}, Enum.EasingStyle.Quart)
 end)
 methodBtnObj.MouseLeave:Connect(function()
-	Tween(methodOuter,    .18, {BackgroundColor3 = Color3.fromRGB(12, 6, 26)})
+	Tween(methodOuter, .18, {BackgroundColor3 = Color3.fromRGB(12, 6, 26)})
 	Tween(methodOuterStroke, .18, {Thickness = 2.5})
-	Tween(methodArrow,    .18, {TextColor3 = Color3.fromRGB(200, 160, 255)})
-	Tween(methodPill,     .18, {Size = UDim2.fromOffset(4, 30), Position = UDim2.new(0, 10, 0.5, -15)})
-	Tween(methodBadge,    .18, {Size = UDim2.fromOffset(100, 30)})
+	Tween(methodArrow, .18, {TextColor3 = Color3.fromRGB(200, 160, 255)})
+	Tween(methodPill, .18, {Size = UDim2.fromOffset(4, 30), Position = UDim2.new(0, 10, 0.5, -15)})
+	Tween(methodBadge, .18, {Size = UDim2.fromOffset(100, 30)})
 end)
 methodBtnObj.MouseButton1Down:Connect(function()
 	Tween(methodOuter, .07, {BackgroundColor3 = Color3.fromRGB(35, 16, 80)})
@@ -878,17 +885,94 @@ methodBtnObj.MouseButton1Up:Connect(function()
 end)
 -- ════════════════════════════════════════════════════════════════════════════
 
+-- ── Method Description Card ──────────────────────────────────────────────────
+local descCardY = CY
+nextY(70, 12)
+
+local descCard = Instance.new("Frame", main)
+descCard.Size            = UDim2.new(0, INNER, 0, 70)
+descCard.Position        = UDim2.new(0, PAD, 0, descCardY)
+descCard.BackgroundColor3= Color3.fromRGB(14, 8, 30)
+descCard.BorderSizePixel = 0
+descCard.ZIndex          = 5
+descCard.ClipsDescendants= true
+Instance.new("UICorner", descCard).CornerRadius = UDim.new(0, 12)
+
+local descCardGrad = Instance.new("UIGradient", descCard)
+descCardGrad.Color = ColorSequence.new{
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 12, 52)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 5, 22)),
+}
+descCardGrad.Rotation = 100
+
+local descCardStroke = Instance.new("UIStroke", descCard)
+descCardStroke.Color          = methodColors[State.method]
+descCardStroke.Thickness      = 1.2
+descCardStroke.Transparency   = 0.4
+descCardStroke.ApplyStrokeMode= Enum.ApplyStrokeMode.Border
+
+-- small icon/indicator on left
+local descIcon = Instance.new("TextLabel", descCard)
+descIcon.Size                   = UDim2.fromOffset(22, 22)
+descIcon.Position               = UDim2.new(0, 12, 0, 10)
+descIcon.BackgroundTransparency = 1
+descIcon.Text                   = "ℹ"
+descIcon.Font                   = Enum.Font.GothamBlack
+descIcon.TextSize               = 18
+descIcon.TextColor3             = methodColors[State.method]
+descIcon.ZIndex                 = 7
+
+-- "HOW IT WORKS" label
+local descTitle = Instance.new("TextLabel", descCard)
+descTitle.Size                   = UDim2.new(1, -42, 0, 14)
+descTitle.Position               = UDim2.new(0, 38, 0, 12)
+descTitle.BackgroundTransparency = 1
+descTitle.Text                   = "HOW IT WORKS"
+descTitle.Font                   = Enum.Font.GothamBold
+descTitle.TextSize               = 11
+descTitle.TextColor3             = Color3.fromRGB(150, 90, 220)
+descTitle.TextXAlignment         = Enum.TextXAlignment.Left
+descTitle.ZIndex                 = 7
+
+-- description text
+local descText = Instance.new("TextLabel", descCard)
+descText.Size                   = UDim2.new(1, -24, 0, 32)
+descText.Position               = UDim2.new(0, 12, 0, 32)
+descText.BackgroundTransparency = 1
+descText.Text                   = methodDescriptions[State.method]
+descText.Font                   = Enum.Font.GothamMedium
+descText.TextSize               = 13
+descText.TextColor3             = Color3.fromRGB(210, 195, 235)
+descText.TextXAlignment         = Enum.TextXAlignment.Left
+descText.TextYAlignment         = Enum.TextYAlignment.Top
+descText.TextWrapped            = true
+descText.ZIndex                 = 7
+
+-- subtle colored top bar
+local descTopBar = Instance.new("Frame", descCard)
+descTopBar.Size            = UDim2.new(1, 0, 0, 2)
+descTopBar.Position        = UDim2.new(0, 0, 0, 0)
+descTopBar.BackgroundColor3= methodColors[State.method]
+descTopBar.BorderSizePixel = 0
+descTopBar.ZIndex          = 6
+local descTopBarGrad = Instance.new("UIGradient", descTopBar)
+descTopBarGrad.Transparency = NumberSequence.new{
+	NumberSequenceKeypoint.new(0, 0.6),
+	NumberSequenceKeypoint.new(0.5, 0),
+	NumberSequenceKeypoint.new(1, 0.6),
+}
+
 -- ── Show Server Pos btn ───────────────────────────────────────────────────────
-local serverBtnObj,serverBtnFrame,serverBtnStroke,serverBtnPill=MakeBtn("SHOW SERVER POS  ●  ON",CY,Color3.fromRGB(220,130,255),Color3.fromRGB(240,190,255))
+local serverBtnObj,serverBtnFrame,serverBtnStroke,serverBtnPill=MakeBtn("SHOW SERVER POS ● ON",CY,Color3.fromRGB(220,130,255),Color3.fromRGB(240,190,255))
 nextY(44,10)
 serverBtnObj.MouseButton1Click:Connect(function()
 	State.showServerPos=not State.showServerPos
 	if State.showServerPos then
-		serverBtnObj.Text="SHOW SERVER POS  ●  ON"; serverBtnObj.TextColor3=Color3.fromRGB(240,190,255)
+		serverBtnObj.Text="SHOW SERVER POS ● ON"; serverBtnObj.TextColor3=Color3.fromRGB(240,190,255)
 		serverBtnPill.BackgroundColor3=Color3.fromRGB(220,130,255); Tween(serverBtnStroke,.2,{Color=Color3.fromRGB(220,130,255),Transparency=0.4})
 		local char=lp.Character; if char then attachVisualizer(char) end
 	else
-		serverBtnObj.Text="SHOW SERVER POS  ●  OFF"; serverBtnObj.TextColor3=Color3.fromRGB(255,100,100)
+		serverBtnObj.Text="SHOW SERVER POS ● OFF"; serverBtnObj.TextColor3=Color3.fromRGB(255,100,100)
 		serverBtnPill.BackgroundColor3=Color3.fromRGB(230,60,60); Tween(serverBtnStroke,.2,{Color=Color3.fromRGB(220,50,50),Transparency=0.35})
 		destroyVisualizer()
 	end
@@ -963,9 +1047,9 @@ local function MakeChip(label,value,xOff,accentC)
 	return val,chip
 end
 local timerChipFrame, statusChipFrame2, bindChipFrame
-timerValueLabel,  timerChipFrame  = MakeChip("TIMER",  string.format("%ds",State.maxTimer), 0,                 Color3.fromRGB(140,60,255))
-statusChipLabel,  statusChipFrame2= MakeChip("STATUS", "OFF",                               CHIP_W+CHIP_GAP,   Color3.fromRGB(60,200,120))
-bindChipLabel,    bindChipFrame   = MakeChip("BIND",   State.keybind.Name:sub(1,3),        (CHIP_W+CHIP_GAP)*2,Color3.fromRGB(220,80,255))
+timerValueLabel, timerChipFrame  = MakeChip("TIMER",  string.format("%ds",State.maxTimer), 0,                  Color3.fromRGB(140,60,255))
+statusChipLabel, statusChipFrame2= MakeChip("STATUS", "OFF",                               CHIP_W+CHIP_GAP,    Color3.fromRGB(60,200,120))
+bindChipLabel,   bindChipFrame   = MakeChip("BIND",   State.keybind.Name:sub(1,3),          (CHIP_W+CHIP_GAP)*2,Color3.fromRGB(220,80,255))
 
 local sep2=MakeSep(CY-2); CY+=8
 
@@ -1001,15 +1085,15 @@ cred.TextColor3=Color3.fromRGB(200,150,255); cred.ZIndex=5
 local credS=Instance.new("UIStroke",cred); credS.Color=Color3.fromRGB(80,30,160); credS.Thickness=1; credS.Transparency=0.6
 
 local finalH = credY+22
-main.Size  = UDim2.new(1,-20,0,finalH)
-wrap.Size  = UDim2.new(0,320,0,finalH+20)
+main.Size = UDim2.new(1,-20,0,finalH)
+wrap.Size = UDim2.new(0,320,0,finalH+20)
 
-hideableContainer = {desyncFrame, mbFrame, keybindBadge, methodOuter, serverBtnFrame, sliderCard, timerChipFrame, statusChipFrame2, bindChipFrame, sep2, sepInst}
+hideableContainer = {desyncFrame, mbFrame, keybindBadge, methodOuter, descCard, serverBtnFrame, sliderCard, timerChipFrame, statusChipFrame2, bindChipFrame, sep2, sepInst}
 
 manualBtn.MouseButton1Click:Connect(doRollback)
 
 -- ════════════════════════════════════
--- applyMethodUI  –  atualiza visual do botão de método
+-- applyMethodUI – atualiza visual do botão de método
 -- ════════════════════════════════════
 applyMethodUI = function()
 	local m   = State.method
@@ -1017,7 +1101,7 @@ applyMethodUI = function()
 	local tcol= methodTextColors[m]
 
 	-- atualiza badge nome
-	methodNameLbl.Text     = methodNames[m]
+	methodNameLbl.Text       = methodNames[m]
 	methodNameLbl.TextColor3 = tcol
 
 	-- atualiza cores do badge
@@ -1034,31 +1118,37 @@ applyMethodUI = function()
 		ColorSequenceKeypoint.new(1,   col),
 	}
 
+	-- atualiza description card
+	descText.Text = methodDescriptions[m]
+	Tween(descCardStroke, .25, {Color = col})
+	Tween(descIcon, .25, {TextColor3 = col})
+	Tween(descTopBar, .25, {BackgroundColor3 = col})
+
 	-- caption do método no chip de status
 	if State.method == 3 then
 		if sliderCard then sliderCard.Visible = false end
 		if statusText then
-			statusText.Text      = "Freeze Mode"
-			statusText.TextColor3= Color3.fromRGB(120,200,255)
+			statusText.Text       = "Freeze Mode"
+			statusText.TextColor3 = Color3.fromRGB(120,200,255)
 		end
 		if statusDot  then statusDot.BackgroundColor3 = Color3.fromRGB(120,200,255) end
 		if nextLbl    then nextLbl.Text = "FREEZE ACTIVE" end
 		if statusChipLabel then
-			statusChipLabel.Text      = "FREEZE"
-			statusChipLabel.TextColor3= Color3.fromRGB(120,200,255)
+			statusChipLabel.Text       = "FREEZE"
+			statusChipLabel.TextColor3 = Color3.fromRGB(120,200,255)
 		end
 		if timerValueLabel then timerValueLabel.Text = "--" end
 	else
 		if sliderCard then sliderCard.Visible = true end
 		if nextLbl    then nextLbl.Text = "NEXT ROLLBACK" end
 		if statusText then
-			statusText.Text      = State.enabled and "Waiting..." or "Disabled"
-			statusText.TextColor3= State.enabled and Color3.fromRGB(200,200,225) or Color3.fromRGB(255,90,90)
+			statusText.Text       = State.enabled and "Waiting..." or "Disabled"
+			statusText.TextColor3 = State.enabled and Color3.fromRGB(200,200,225) or Color3.fromRGB(255,90,90)
 		end
 		if statusDot  then statusDot.BackgroundColor3 = Color3.fromRGB(255,60,60) end
 		if statusChipLabel then
-			statusChipLabel.Text      = "OFF"
-			statusChipLabel.TextColor3= Color3.fromRGB(255,100,100)
+			statusChipLabel.Text       = "OFF"
+			statusChipLabel.TextColor3 = Color3.fromRGB(255,100,100)
 		end
 		if timerValueLabel then timerValueLabel.Text = string.format("%ds", State.maxTimer) end
 	end
@@ -1078,20 +1168,20 @@ local desyncOn = true
 desyncBtn.MouseButton1Click:Connect(function()
 	desyncOn = not desyncOn; State.enabled = desyncOn
 	if desyncOn then
-		desyncBtn.Text      = "DESYNC  ●  ON"
-		desyncBtn.TextColor3= Color3.fromRGB(140,255,180)
+		desyncBtn.Text       = "DESYNC ● ON"
+		desyncBtn.TextColor3 = Color3.fromRGB(140,255,180)
 		desyncPill.BackgroundColor3= Color3.fromRGB(60,220,130)
 		Tween(desyncStroke,.2,{Color=Color3.fromRGB(60,220,130),Transparency=0.4})
 		if statusChipLabel then statusChipLabel.TextColor3=Color3.fromRGB(140,255,180) end
 		if State.method==3 then applyMethodUI() end
 	else
-		desyncBtn.Text      = "DESYNC  ●  OFF"
-		desyncBtn.TextColor3= Color3.fromRGB(255,100,100)
+		desyncBtn.Text       = "DESYNC ● OFF"
+		desyncBtn.TextColor3 = Color3.fromRGB(255,100,100)
 		desyncPill.BackgroundColor3= Color3.fromRGB(230,60,60)
 		Tween(desyncStroke,.2,{Color=Color3.fromRGB(220,50,50),Transparency=0.35})
 		State.desync=false; State.stealing=false
-		if statusText  then statusText.Text="Disabled"; statusText.TextColor3=Color3.fromRGB(255,90,90) end
-		if statusDot   then statusDot.BackgroundColor3=Color3.fromRGB(255,60,60) end
+		if statusText then statusText.Text="Disabled"; statusText.TextColor3=Color3.fromRGB(255,90,90) end
+		if statusDot  then statusDot.BackgroundColor3=Color3.fromRGB(255,60,60) end
 		if statusChipLabel then statusChipLabel.Text="OFF"; statusChipLabel.TextColor3=Color3.fromRGB(255,100,100) end
 	end
 end)
@@ -1129,7 +1219,7 @@ task.spawn(function()
 end)
 
 -- ════════════════════════════════════
--- LOOP PRINCIPAL
+--          LOOP PRINCIPAL
 -- ════════════════════════════════════
 task.spawn(function()
 	local hasRolledBackOnce = false
@@ -1172,8 +1262,8 @@ task.spawn(function()
 
 				while State.timer>0 and lp:GetAttribute("Stealing")==true and State.enabled do
 					if statusText then
-						statusText.Text      = string.format("%.1fs",State.timer)
-						statusText.TextColor3= Color3.fromRGB(195,135,255)
+						statusText.Text       = string.format("%.1fs",State.timer)
+						statusText.TextColor3 = Color3.fromRGB(195,135,255)
 					end
 					if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(180,100,255) end
 					task.wait(0.1); State.timer=math.max(0,State.timer-0.1)
@@ -1244,4 +1334,4 @@ UIS.InputEnded:Connect(function(i)
 	end
 end)
 
-print("[Albux Desync V6] Loaded")
+print("[Albux Desync V6] Loaded ")
