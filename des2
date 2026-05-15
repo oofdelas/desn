@@ -87,8 +87,14 @@ local State = {
 }
 
 local lastSafePos = nil
+local freezePos = nil           -- posição congelada do FREEZE
+local lastFreezeUpdate = 0      -- ultimo update do freeze
+local FREEZE_INTERVAL = 4       -- segundos entre updates
+
 local statusText, statusDot, keybindBadge, keybindStroke, main, wrap
 local timerValueLabel, bindChipLabel, statusChipLabel
+local sliderCard, nextLbl, methodBtnObj
+local applyMethodUI -- forward declaration
 
 local BALL_COLOR      = Color3.fromRGB(180, 80, 255)
 local VISUAL_Y_OFFSET = 0
@@ -179,7 +185,9 @@ RunService.RenderStepped:Connect(function()
         return
     end
 
-    if not State.stealing then
+    -- FREEZE: serverPos é controlado pelo hook
+    -- SIMPLE/VELOCITY: serverPos atualiza fora do roubo
+    if State.method ~= 3 and not State.stealing then
         serverPos = hrp.Position
     end
 
@@ -213,17 +221,29 @@ end)
 local function doRollback()
     local char = lp.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp or not lastSafePos then return end
+    if not hrp then return end
 
     serverPos = hrp.Position
 
     if State.method == 1 then
+        -- SIMPLE
+        if not lastSafePos then return end
         hrp.CFrame = CFrame.new(lastSafePos)
+
     elseif State.method == 2 then
+        -- VELOCITY
+        if not lastSafePos then return end
         hrp.Velocity                = Vector3.zero
         hrp.AssemblyLinearVelocity  = Vector3.zero
         hrp.AssemblyAngularVelocity = Vector3.zero
         hrp.CFrame = CFrame.new(lastSafePos)
+
+    elseif State.method == 3 then
+        -- FREEZE: teleporta pra posição congelada
+        if not freezePos then freezePos = hrp.Position end
+        hrp.CFrame = CFrame.new(freezePos)
+        serverPos = freezePos
+        return -- nao mexe no timer
     end
 
     State.timer = State.maxTimer
@@ -236,7 +256,32 @@ end
 
 pcall(function()
     raknet.add_send_hook(function(p)
-        if not State.stealing or not State.desync or not State.enabled then return end
+        if not State.enabled then return end
+
+        -- METHOD 3 (FREEZE): funciona SEMPRE
+        if State.method == 3 then
+            if p.PacketId == 0x1B then
+                if os.clock() - lastFreezeUpdate >= FREEZE_INTERVAL then
+                    lastFreezeUpdate = os.clock()
+                    local char = lp.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        freezePos = hrp.Position
+                        serverPos = freezePos
+                    end
+                else
+                    local b = p.AsBuffer
+                    buffer.writeu32(b, 1, 0xFFFFFFFF)
+                    buffer.writeu32(b, 5, 0xFFFFFFFF)
+                    buffer.writeu32(b, 9, 0xFFFFFFFF)
+                    p:SetData(b)
+                end
+            end
+            return
+        end
+
+        -- METHODS 1 e 2: só durante roubo
+        if not State.stealing or not State.desync then return end
         if p.PacketId == 0x1B then
             local b = p.AsBuffer
             buffer.writeu32(b, 1, 0xFFFFFFFF)
@@ -246,7 +291,12 @@ pcall(function()
         end
     end)
     raknet.add_recv_hook(function(p)
-        if not State.stealing or not State.desync or not State.enabled then return end
+        if not State.enabled then return end
+        if State.method == 3 then
+            if p.PacketId == 0x1B or p.PacketId == 0x86 or p.PacketId == 0x21 then p:Drop() end
+            return
+        end
+        if not State.stealing or not State.desync then return end
         if p.PacketId == 0x1B or p.PacketId == 0x86 or p.PacketId == 0x21 then p:Drop() end
     end)
 end)
@@ -306,7 +356,7 @@ local function LoadConfig()
                 if kok and kc then State.keybind = kc end
             end
             if d.MaxTimer  then State.maxTimer = math.clamp(d.MaxTimer,1,8); State.timer = State.maxTimer end
-            if d.Method    then State.method   = math.clamp(d.Method,1,2) end
+            if d.Method    then State.method   = math.clamp(d.Method,1,3) end
             if d.ShowServer ~= nil then State.showServerPos = d.ShowServer end
             if d.Minimized  ~= nil then State.minimized     = d.Minimized  end
             return UDim2.new(d.X or 0.5, d.XO or -160, d.Y or 0.3, d.YO or 0)
@@ -316,7 +366,7 @@ local function LoadConfig()
 end
 
 local savedPos    = LoadConfig()
-local methodNames = {"SIMPLE", "VELOCITY"}
+local methodNames = {"SIMPLE", "VELOCITY", "FREEZE"}
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "AlbuxHub_V6"; gui.ResetOnSpawn = false
@@ -334,16 +384,11 @@ main.BackgroundColor3 = Color3.fromRGB(10,5,20); main.BorderSizePixel = 0
 main.ClipsDescendants = false; main.ZIndex = 2
 Instance.new("UICorner",main).CornerRadius = UDim.new(0,18)
 
--- ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
--- BORDA ARREDONDADA CLARA ANIMADA - 3 CAMADAS NEON
--- ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
-
+-- ▓▓▓ BORDA NEON 3 CAMADAS ▓▓▓
 local glowOuter = Instance.new("UIStroke", main)
 glowOuter.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-glowOuter.Thickness = 8
-glowOuter.Transparency = 0.75
+glowOuter.Thickness = 8; glowOuter.Transparency = 0.75
 glowOuter.Color = Color3.fromRGB(220, 170, 255)
-
 local glowOuterGrad = Instance.new("UIGradient", glowOuter)
 glowOuterGrad.Color = ColorSequence.new{
     ColorSequenceKeypoint.new(0,    Color3.fromRGB(200, 150, 255)),
@@ -353,10 +398,8 @@ glowOuterGrad.Color = ColorSequence.new{
 
 local glowMid = Instance.new("UIStroke", main)
 glowMid.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-glowMid.Thickness = 4
-glowMid.Transparency = 0.4
+glowMid.Thickness = 4; glowMid.Transparency = 0.4
 glowMid.Color = Color3.fromRGB(230, 190, 255)
-
 local glowMidGrad = Instance.new("UIGradient", glowMid)
 glowMidGrad.Color = ColorSequence.new{
     ColorSequenceKeypoint.new(0,    Color3.fromRGB(210, 160, 255)),
@@ -366,10 +409,8 @@ glowMidGrad.Color = ColorSequence.new{
 
 local mainStroke = Instance.new("UIStroke", main)
 mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-mainStroke.Thickness = 2
-mainStroke.Transparency = 0
+mainStroke.Thickness = 2; mainStroke.Transparency = 0
 mainStroke.Color = Color3.fromRGB(255, 230, 255)
-
 local mainStrokeGrad = Instance.new("UIGradient", mainStroke)
 mainStrokeGrad.Color = ColorSequence.new{
     ColorSequenceKeypoint.new(0,    Color3.fromRGB(200, 150, 255)),
@@ -389,25 +430,14 @@ task.spawn(function()
         task.wait(0.03)
     end
 end)
-
 task.spawn(function()
     while main and main.Parent do
-        TweenService:Create(mainStroke,
-            TweenInfo.new(1.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-            {Transparency = 0.4, Thickness = 2.8}
-        ):Play()
-        TweenService:Create(glowMid,
-            TweenInfo.new(1.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-            {Transparency = 0.7, Thickness = 6}
-        ):Play()
-        TweenService:Create(glowOuter,
-            TweenInfo.new(1.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-            {Transparency = 0.9, Thickness = 12}
-        ):Play()
+        TweenService:Create(mainStroke,TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.4,Thickness=2.8}):Play()
+        TweenService:Create(glowMid,TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.7,Thickness=6}):Play()
+        TweenService:Create(glowOuter,TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.9,Thickness=12}):Play()
         break
     end
 end)
--- ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 
 local bgGrad = Instance.new("UIGradient", main)
 bgGrad.Color = ColorSequence.new{
@@ -512,7 +542,6 @@ local vs=Instance.new("UIStroke",vBadge); vs.Color=Color3.fromRGB(200,140,255); 
 local vLbl=Instance.new("TextLabel",vBadge); vLbl.Size=UDim2.new(1,0,1,0); vLbl.BackgroundTransparency=1
 vLbl.Text="V6"; vLbl.Font=Enum.Font.GothamBlack; vLbl.TextSize=12; vLbl.TextColor3=Color3.fromRGB(255,230,255); vLbl.ZIndex=7
 
--- ▓▓▓ MIN BUTTON - EMBAIXO DO V6 ▓▓▓
 local minBtn=Instance.new("TextButton",header)
 minBtn.Size=UDim2.fromOffset(46,22); minBtn.Position=UDim2.new(1,-46,0,30)
 minBtn.BackgroundColor3=Color3.fromRGB(50,18,110); minBtn.BorderSizePixel=0
@@ -569,7 +598,7 @@ task.spawn(function()
 end)
 RunService.Heartbeat:Connect(function() if dotGlow and statusDot then dotGlow.ImageColor3=statusDot.BackgroundColor3 end end)
 
-local nextLbl=Instance.new("TextLabel",statusCard)
+nextLbl=Instance.new("TextLabel",statusCard)
 nextLbl.Text="NEXT ROLLBACK"; nextLbl.Position=UDim2.new(0,34,0,12); nextLbl.Size=UDim2.new(1,-38,0,14)
 nextLbl.BackgroundTransparency=1; nextLbl.Font=Enum.Font.GothamBold; nextLbl.TextSize=9
 nextLbl.TextColor3=Color3.fromRGB(140,75,210); nextLbl.TextXAlignment=Enum.TextXAlignment.Left; nextLbl.ZIndex=7
@@ -666,9 +695,9 @@ end)
 
 local desyncBtn,desyncFrame,desyncStroke,desyncPill=MakeBtn("DESYNC -- ON",CY,Color3.fromRGB(60,220,130),Color3.fromRGB(140,255,180))
 nextY(44,10)
-local methodBtnObj,_,methodStroke,methodPill=MakeBtn("METHOD: "..methodNames[State.method],CY,Color3.fromRGB(80,170,255),Color3.fromRGB(170,220,255))
+local _methodBtnObj,_,methodStroke,methodPill=MakeBtn("METHOD: "..methodNames[State.method],CY,Color3.fromRGB(80,170,255),Color3.fromRGB(170,220,255))
+methodBtnObj = _methodBtnObj
 nextY(44,10)
-methodBtnObj.MouseButton1Click:Connect(function() State.method=State.method%2+1; methodBtnObj.Text="METHOD: "..methodNames[State.method]; SaveConfig() end)
 
 local serverBtnObj,serverBtnFrame,serverBtnStroke,serverBtnPill=MakeBtn("SHOW SERVER POS -- ON",CY,Color3.fromRGB(220,130,255),Color3.fromRGB(240,190,255))
 nextY(44,10)
@@ -687,7 +716,7 @@ serverBtnObj.MouseButton1Click:Connect(function()
 end)
 
 local sliderY=CY; nextY(54,10)
-local sliderCard=Instance.new("Frame",main)
+sliderCard=Instance.new("Frame",main)
 sliderCard.Size=UDim2.new(0,INNER,0,54); sliderCard.Position=UDim2.new(0,PAD,0,sliderY)
 sliderCard.BackgroundColor3=Color3.fromRGB(16,9,32); sliderCard.BorderSizePixel=0; sliderCard.ZIndex=5
 Instance.new("UICorner",sliderCard).CornerRadius=UDim.new(0,12)
@@ -793,6 +822,51 @@ hideableContainer={desyncFrame,mbFrame,keybindBadge,methodBtnObj.Parent,serverBt
 
 manualBtn.MouseButton1Click:Connect(doRollback)
 
+-- ════════════════════════════════════
+-- APPLY METHOD UI (FREEZE muda visual)
+-- ════════════════════════════════════
+applyMethodUI = function()
+    methodBtnObj.Text = "METHOD: "..methodNames[State.method]
+    if State.method == 3 then
+        if sliderCard then sliderCard.Visible = false end
+        if statusText then
+            statusText.Text = "Freeze Mode"
+            statusText.TextColor3 = Color3.fromRGB(120, 200, 255)
+        end
+        if statusDot then statusDot.BackgroundColor3 = Color3.fromRGB(120, 200, 255) end
+        if nextLbl then nextLbl.Text = "FREEZE ACTIVE" end
+        if statusChipLabel then
+            statusChipLabel.Text = "FREEZE"
+            statusChipLabel.TextColor3 = Color3.fromRGB(120, 200, 255)
+        end
+        if timerValueLabel then timerValueLabel.Text = "--" end
+    else
+        if sliderCard then sliderCard.Visible = true end
+        if nextLbl then nextLbl.Text = "NEXT ROLLBACK" end
+        if statusText then
+            statusText.Text = State.enabled and "Waiting..." or "Disabled"
+            statusText.TextColor3 = State.enabled and Color3.fromRGB(200,200,225) or Color3.fromRGB(255,90,90)
+        end
+        if statusDot then statusDot.BackgroundColor3 = Color3.fromRGB(255,60,60) end
+        if statusChipLabel then
+            statusChipLabel.Text = "OFF"
+            statusChipLabel.TextColor3 = Color3.fromRGB(255,100,100)
+        end
+        if timerValueLabel then timerValueLabel.Text = string.format("%ds", State.maxTimer) end
+    end
+end
+
+methodBtnObj.MouseButton1Click:Connect(function()
+    State.method = State.method % 3 + 1
+    applyMethodUI()
+    SaveConfig()
+end)
+
+task.spawn(function()
+    task.wait(0.1)
+    applyMethodUI()
+end)
+
 local desyncOn=true
 desyncBtn.MouseButton1Click:Connect(function()
     desyncOn=not desyncOn; State.enabled=desyncOn
@@ -800,6 +874,7 @@ desyncBtn.MouseButton1Click:Connect(function()
         desyncBtn.Text="DESYNC -- ON"; desyncBtn.TextColor3=Color3.fromRGB(140,255,180); desyncPill.BackgroundColor3=Color3.fromRGB(60,220,130)
         Tween(desyncStroke,.2,{Color=Color3.fromRGB(60,220,130),Transparency=0.4})
         if statusChipLabel then statusChipLabel.TextColor3=Color3.fromRGB(140,255,180) end
+        if State.method == 3 then applyMethodUI() end
     else
         desyncBtn.Text="DESYNC -- OFF"; desyncBtn.TextColor3=Color3.fromRGB(255,100,100); desyncPill.BackgroundColor3=Color3.fromRGB(230,60,60)
         Tween(desyncStroke,.2,{Color=Color3.fromRGB(220,50,50),Transparency=0.35})
@@ -821,84 +896,100 @@ UIS.InputBegan:Connect(function(input,gpe)
     if input.KeyCode==State.keybind then doRollback() end
 end)
 
+-- Salva posição segura (SIMPLE/VELOCITY) e inicializa freezePos (FREEZE)
 task.spawn(function()
     while true do
         local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-        if hrp and (not State.stealing or not State.desync) then
-            lastSafePos=hrp.Position
+        if hrp then
+            if State.method ~= 3 and (not State.stealing or not State.desync) then
+                lastSafePos=hrp.Position
+            end
+            if State.method == 3 and not freezePos then
+                freezePos = hrp.Position
+                serverPos = freezePos
+            end
         end
         task.wait(0.1)
     end
 end)
 
+-- ════════════════════════════════════
+-- LOOP PRINCIPAL
+-- ════════════════════════════════════
 task.spawn(function()
     local hasRolledBackOnce = false
 
     while true do
-        local isStealing = lp:GetAttribute("Stealing") == true
+        -- METODO FREEZE: ignora todo o loop de auto-rollback
+        if State.method == 3 then
+            State.stealing   = false
+            State.isDelaying = false
+            task.wait(0.2)
+        else
+            local isStealing = lp:GetAttribute("Stealing") == true
 
-        if not isStealing or not State.enabled then
-            State.stealing    = false
-            State.desync      = false
-            State.isDelaying  = false
-            State.timer       = State.maxTimer
-            hasRolledBackOnce = false
+            if not isStealing or not State.enabled then
+                State.stealing    = false
+                State.desync      = false
+                State.isDelaying  = false
+                State.timer       = State.maxTimer
+                hasRolledBackOnce = false
 
-            if statusText then
-                statusText.Text      = State.enabled and "Waiting..." or "Disabled"
-                statusText.TextColor3 = State.enabled and Color3.fromRGB(200,200,225) or Color3.fromRGB(255,90,90)
-            end
-            if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(255,60,60) end
-            if statusChipLabel and State.enabled then
-                statusChipLabel.Text="OFF"; statusChipLabel.TextColor3=Color3.fromRGB(255,100,100)
-            end
+                if statusText then
+                    statusText.Text      = State.enabled and "Waiting..." or "Disabled"
+                    statusText.TextColor3 = State.enabled and Color3.fromRGB(200,200,225) or Color3.fromRGB(255,90,90)
+                end
+                if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(255,60,60) end
+                if statusChipLabel and State.enabled then
+                    statusChipLabel.Text="OFF"; statusChipLabel.TextColor3=Color3.fromRGB(255,100,100)
+                end
 
-        elseif not State.isDelaying then
-            State.isDelaying = true
-            State.stealing   = true
-            State.desync     = true
+            elseif not State.isDelaying then
+                State.isDelaying = true
+                State.stealing   = true
+                State.desync     = true
 
-            if statusChipLabel then statusChipLabel.Text="ON"; statusChipLabel.TextColor3=Color3.fromRGB(140,255,180) end
-            if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(180,100,255) end
+                if statusChipLabel then statusChipLabel.Text="ON"; statusChipLabel.TextColor3=Color3.fromRGB(140,255,180) end
+                if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(180,100,255) end
 
-            local char = lp.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                local char = lp.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
 
-            if hrp then
-                local initialPos = hrp.Position
-                local teleported = false
-                local maxWaitTime = 1
-                local startTime = tick()
+                if hrp then
+                    local initialPos = hrp.Position
+                    local teleported = false
+                    local maxWaitTime = 1
+                    local startTime = tick()
 
-                while not teleported and (tick() - startTime) < maxWaitTime do
-                    task.wait()
-                    local currentPos = hrp.Position
-                    local distance = (currentPos - initialPos).Magnitude
-
-                    if distance > 10 then
-                        teleported = true
+                    while not teleported and (tick() - startTime) < maxWaitTime do
+                        task.wait()
+                        local currentPos = hrp.Position
+                        local distance = (currentPos - initialPos).Magnitude
+                        if distance > 10 then
+                            teleported = true
+                        end
                     end
                 end
-            end
 
-            if not hasRolledBackOnce and lp:GetAttribute("Stealing")==true then
-                doRollback()
-                hasRolledBackOnce = true
-            end
-
-            while State.timer>0 and lp:GetAttribute("Stealing")==true and State.enabled do
-                if statusText then
-                    statusText.Text=string.format("%.1fs",State.timer)
-                    statusText.TextColor3=Color3.fromRGB(195,135,255)
+                if not hasRolledBackOnce and lp:GetAttribute("Stealing")==true then
+                    doRollback()
+                    hasRolledBackOnce = true
                 end
-                if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(180,100,255) end
-                task.wait(0.1); State.timer=math.max(0,State.timer-0.1)
-            end
 
-            if lp:GetAttribute("Stealing")==true and State.enabled then
-                doRollback(); hasRolledBackOnce=false
+                while State.timer>0 and lp:GetAttribute("Stealing")==true and State.enabled do
+                    if statusText then
+                        statusText.Text=string.format("%.1fs",State.timer)
+                        statusText.TextColor3=Color3.fromRGB(195,135,255)
+                    end
+                    if statusDot then statusDot.BackgroundColor3=Color3.fromRGB(180,100,255) end
+                    task.wait(0.1); State.timer=math.max(0,State.timer-0.1)
+                end
+
+                if lp:GetAttribute("Stealing")==true and State.enabled then
+                    doRollback(); hasRolledBackOnce=false
+                end
+                State.isDelaying=false
             end
-            State.isDelaying=false
         end
         task.wait(0.05)
     end
@@ -908,7 +999,12 @@ task.spawn(function()
     local last=nil
     while true do
         local char=lp.Character; local tool=char and char:FindFirstChildOfClass("Tool"); local n=tool and tool.Name or nil
-        if n and n~=last and n~="Flying Carpet" then task.wait(0.05); doRollback() end
+        if n and n~=last and n~="Flying Carpet" then
+            -- Auto rollback ao equipar ferramenta SO funciona em SIMPLE/VELOCITY
+            if State.method ~= 3 then
+                task.wait(0.05); doRollback()
+            end
+        end
         last=n; task.wait(0.1)
     end
 end)
@@ -927,6 +1023,9 @@ local function setMinimized(min)
         for _,el in ipairs(hideableContainer) do if el and el.Parent then el.Visible=true end end
         discBar.Position=UDim2.new(0,PAD,0,discY); cred.Position=UDim2.new(0,0,0,credY)
         Tween(main,0.3,{Size=UDim2.new(1,-20,0,fullHeight)}); Tween(wrap,0.3,{Size=UDim2.new(0,320,0,fullHeight+20)})
+        -- reaplica FREEZE depois de expandir (esconde slider de novo se necessário)
+        task.wait(0.35)
+        applyMethodUI()
     end
     SaveConfig()
 end
