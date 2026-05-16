@@ -25,6 +25,14 @@ if not game:IsLoaded() then game.Loaded:Wait() end
     "442d4c097a9ec612f70aef8c19811c2e5c8ed7408ed88168e9e5aeeef15e08a5",
     "af0b98aba344654c0dc21a5792956a2c653774f7d927ea02bddfbea4e927b417",
     "3b8fbace749ee59d9f418e31e072a0fbe89c0db1a4b9862399a95b24c642cf2e",
+    "22FF4725F6823D87D1DA39C090C471467C29AD73148D4E99B6DEEF8F630BB03EB343E47D13EB82CDFFB7EA36FC8D2A434C4A61A97FAFC4B82AE6EA2A1701C22C",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
 }
 
 local hwid_atual = gethwid()
