@@ -1,7 +1,7 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 
   local HWIDs_Autorizados = {
-    "a",
+    "ef98c6de627e9e06a45fbb38f54143c7e9c59addebc1dfe36adc9bfd59eb47c0",
     "a",
     "a",
     "a",
