@@ -1,0 +1,1106 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace         = game:GetService("Workspace")
+local TweenService      = game:GetService("TweenService")
+local HttpService       = game:GetService("HttpService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+
+local AnimalsData, AnimalsShared, NumberUtils
+pcall(function()
+	local Datas  = ReplicatedStorage:WaitForChild("Datas", 5)
+	local Shared = ReplicatedStorage:WaitForChild("Shared", 5)
+	local Utils  = ReplicatedStorage:WaitForChild("Utils", 5)
+	if Datas  then AnimalsData   = require(Datas:WaitForChild("Animals")) end
+	if Shared then AnimalsShared = require(Shared:WaitForChild("Animals")) end
+	if Utils  then NumberUtils   = require(Utils:WaitForChild("NumberUtils")) end
+end)
+
+local function formatMoney(n)
+	if NumberUtils then
+		local ok, r = pcall(function()
+			if type(NumberUtils.FormatNumber)=="function" then return NumberUtils.FormatNumber(n) end
+			if type(NumberUtils.Format)=="function" then return NumberUtils.Format(n) end
+			if type(NumberUtils.Short)=="function" then return NumberUtils.Short(n) end
+			if type(NumberUtils.toShort)=="function" then return NumberUtils.toShort(n) end
+			if type(NumberUtils.ToString)=="function" then return NumberUtils.ToString(n) end
+		end)
+		if ok and r then return tostring(r) end
+	end
+	if n>=1e12 then return string.format("%.2fT",n/1e12)
+	elseif n>=1e9 then return string.format("%.2fB",n/1e9)
+	elseif n>=1e6 then return string.format("%.2fM",n/1e6)
+	elseif n>=1e3 then return string.format("%.1fK",n/1e3)
+	else return tostring(math.floor(n)) end
+end
+
+local MutColorMap = {
+	Gold=Color3.fromRGB(255,200,0), Diamond=Color3.fromRGB(100,210,255),
+	Rainbow=Color3.fromRGB(255,100,220), Bloodrot=Color3.fromRGB(200,20,30),
+	Bloodroot=Color3.fromRGB(200,20,30), Candy=Color3.fromRGB(255,140,200),
+	Lava=Color3.fromRGB(255,100,0), Galaxy=Color3.fromRGB(160,60,255),
+	["Yin Yang"]=Color3.fromRGB(220,220,220), YinYang=Color3.fromRGB(220,220,220),
+	Radioactive=Color3.fromRGB(80,255,60), Cursed=Color3.fromRGB(220,20,20),
+	Divine=Color3.fromRGB(255,245,150), Cyber=Color3.fromRGB(0,230,255),
+	Disco=Color3.fromRGB(210,130,255),
+}
+local function getMutColor(mut)
+	if not mut or mut=="" or mut=="None" or mut=="none" then return nil end
+	return MutColorMap[mut] or Color3.fromRGB(200,180,255)
+end
+local function getMutLabel(mut)
+	if not mut or mut=="" or mut=="None" or mut=="none" then return nil end
+	return mut
+end
+
+-- ════════════════════════════════════
+-- STATE — selectedTarget agora é UID
+-- ════════════════════════════════════
+local State = {
+	autoStealEnabled = true,
+	stealDelay       = 1.30,
+	isStealing       = false,
+	guiClosed        = false,
+	minimized        = false,
+	method           = 1,
+	priorityList     = {},
+	selectedUID      = nil,   -- uid do podium selecionado (FIX bug 2)
+	selectionChanged = false,
+}
+
+local progressFill, main, wrap
+local listPanel, listVisible = nil, false
+local editListBtn
+
+local CFG_FOLDER = "AlbuxHub_AutoGrab"
+local CFG_FILE   = CFG_FOLDER.."/config.json"
+if not isfolder(CFG_FOLDER) then makefolder(CFG_FOLDER) end
+
+local function SaveConfig()
+	pcall(function()
+		writefile(CFG_FILE, HttpService:JSONEncode({
+			Method       = State.method,
+			PriorityList = State.priorityList,
+			X  = wrap.Position.X.Scale,
+			XO = wrap.Position.X.Offset,
+			Y  = wrap.Position.Y.Scale,
+			YO = wrap.Position.Y.Offset,
+		}))
+	end)
+end
+
+local function LoadConfig()
+	if isfile and isfile(CFG_FILE) then
+		local ok,d = pcall(function() return HttpService:JSONDecode(readfile(CFG_FILE)) end)
+		if ok and d then
+			if d.Method       then State.method       = math.clamp(d.Method,1,3) end
+			if d.PriorityList then State.priorityList = d.PriorityList end
+			return UDim2.new(d.X or 0, d.XO or 20, d.Y or 0, d.YO or 200)
+		end
+	end
+	return UDim2.new(0,20,0,200)
+end
+
+local savedPos = LoadConfig()
+
+local function getIncomeFromData(name)
+	if not AnimalsData or not name then return 0 end
+	local data = AnimalsData[name]
+	if not data then
+		for k,v in pairs(AnimalsData) do
+			if type(k)=="string" and string.lower(k)==string.lower(name) then data=v; break end
+			if type(v)=="table" and v.Name and string.lower(tostring(v.Name))==string.lower(name) then data=v; break end
+		end
+	end
+	if type(data)=="table" then
+		local val = data.ProduceMoney or data.Income or data.Generation or data.Gen or data.Produce or data.Money or data.Earnings or data.Rate
+		if type(val)=="number" then return val end
+		if val then return tonumber(val) or 0 end
+	end
+	return 0
+end
+
+local function getPromptData(prompt, name)
+	if not AnimalsShared or not name then return getIncomeFromData(name), nil end
+	local plot = prompt.Parent
+	for _=1,10 do
+		if not plot then break end
+		if plot.Parent and plot.Parent.Name=="Plots" then break end
+		plot = plot.Parent
+	end
+	if not plot then return getIncomeFromData(name), nil end
+	local promptPos
+	if prompt.Parent and prompt.Parent:IsA("Attachment") then promptPos=prompt.Parent.WorldPosition
+	elseif prompt.Parent and prompt.Parent:IsA("BasePart") then promptPos=prompt.Parent.Position end
+	local candidates={}
+	for _,c in ipairs(plot:GetChildren()) do
+		if c:IsA("Model") and c.Name==name then table.insert(candidates,c) end
+	end
+	if #candidates==0 then return getIncomeFromData(name), nil end
+	local model
+	if promptPos and #candidates>1 then
+		local bd=math.huge
+		for _,m in ipairs(candidates) do
+			local pp=m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+			if pp then local d=(pp.Position-promptPos).Magnitude; if d<bd then bd=d; model=m end end
+		end
+		if not model then model=candidates[1] end
+	else model=candidates[1] end
+	if not model then return getIncomeFromData(name), nil end
+	local mut = model:GetAttribute("Mutation") or model:GetAttribute("__mutation")
+	local traitsStr = model:GetAttribute("Traits") or model:GetAttribute("__traits") or ""
+	local traits={}
+	if traitsStr~="" then
+		for t in traitsStr:gmatch("[^,]+") do
+			local tr=t:match("^%s*(.-)%s*$"); if tr~="" then table.insert(traits,tr) end
+		end
+	end
+	local mc = mut; if mut=="" or mut=="None" or mut=="none" then mc=nil end
+	local ok,gen = pcall(function() return AnimalsShared:GetGeneration(name,mc,traits,nil) end)
+	local income = (ok and gen and gen>0) and gen or getIncomeFromData(name)
+	return income, mut
+end
+
+local function getAllBrainrots()
+	local result={}
+	if type(AnimalsData)~="table" then return result end
+	local list={}
+	for key,data in pairs(AnimalsData) do
+		if type(data)=="table" then
+			local n=data.Name or data.DisplayName or key
+			local v=data.ProduceMoney or data.Price or data.Income or data.Generation or data.Gen or data.Value or data.Cost or data.Rate or 0
+			if type(v)~="number" then v=tonumber(v) or 0 end
+			table.insert(list,{name=tostring(n),value=v})
+		elseif type(data)=="string" then table.insert(list,{name=data,value=0}) end
+	end
+	table.sort(list,function(a,b) if a.value==b.value then return a.name<b.name end; return a.value>b.value end)
+	for _,item in ipairs(list) do table.insert(result,item.name) end
+	return result
+end
+
+local function isMyPlot(plot)
+	if not plot then return false end
+	local sign=plot:FindFirstChild("PlotSign")
+	if sign then
+		local yb=sign:FindFirstChild("YourBase")
+		if yb and yb:IsA("BillboardGui") and yb.Enabled then return true end
+	end
+	return false
+end
+
+local function getRootPart()
+	local char=LocalPlayer.Character
+	return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso"))
+end
+
+local function isValidPrompt(prompt)
+	if not prompt or not prompt.Parent then return false end
+	if not prompt.Enabled then return false end
+	local st=prompt:GetAttribute("State"); local at=prompt.ActionText
+	if st~=nil then return st=="Steal" or st=="Grab" end
+	if at=="Steal" or at=="Grab" then return true end
+	return prompt.Enabled
+end
+
+local function collectBrainrots()
+	local stealable,allVisible={},{}
+	local root=getRootPart()
+	local plots=Workspace:FindFirstChild("Plots")
+	if not plots then return stealable,allVisible end
+	for _,plot in ipairs(plots:GetChildren()) do
+		if isMyPlot(plot) then continue end
+		local podiums=plot:FindFirstChild("AnimalPodiums")
+		if not podiums then continue end
+		for _,podium in ipairs(podiums:GetChildren()) do
+			local base=podium:FindFirstChild("Base")
+			local sp=base and base:FindFirstChild("Spawn")
+			local att=sp and sp:FindFirstChild("PromptAttachment")
+			if not att then continue end
+			for _,child in ipairs(att:GetChildren()) do
+				if not child:IsA("ProximityPrompt") then continue end
+				local name=child.ObjectText or ""
+				if name=="" then continue end
+				local dist=root and (root.Position-child.Parent.WorldPosition).Magnitude or 999
+				local income,mut=getPromptData(child,name)
+				local sf=isValidPrompt(child)
+				local uid=tostring(podium).."_"..name
+				local entry={prompt=child,dist=dist,name=name,income=income,mutation=mut,isStealable=sf,uid=uid}
+				table.insert(allVisible,entry)
+				if sf then table.insert(stealable,entry) end
+			end
+		end
+	end
+	return stealable,allVisible
+end
+
+-- ════════════════════════════════════
+-- getTarget agora usa UID
+-- ════════════════════════════════════
+local function getTarget()
+	local all,_=collectBrainrots()
+	if #all==0 then return nil end
+
+	-- FIX bug 2: busca pelo uid exato
+	if State.selectedUID then
+		for _,p in ipairs(all) do
+			if p.uid==State.selectedUID then return p.prompt end
+		end
+		return nil
+	end
+
+	if State.method==1 then
+		local best,bd=nil,150
+		for _,p in ipairs(all) do if p.dist<bd then bd=p.dist; best=p.prompt end end
+		return best
+	elseif State.method==2 then
+		for _,wn in ipairs(State.priorityList) do
+			local bp,bi=nil,-1
+			for _,p in ipairs(all) do if p.name==wn and p.income>bi then bi=p.income; bp=p.prompt end end
+			if bp then return bp end
+		end
+		return nil
+	elseif State.method==3 then
+		local best,bg=nil,-1
+		for _,p in ipairs(all) do if p.income>bg then bg=p.income; best=p.prompt end end
+		return best
+	end
+end
+
+local function fireConn(prompt,sig)
+	for _,c in ipairs(getconnections(prompt[sig])) do if c.Function then task.spawn(c.Function) end end
+end
+
+local function Tween(obj,t,props,style,dir)
+	style=style or Enum.EasingStyle.Quart; dir=dir or Enum.EasingDirection.Out
+	TweenService:Create(obj,TweenInfo.new(t,style,dir),props):Play()
+end
+
+local function AnimGradient(obj,speed,colors)
+	speed=speed or 0.008
+	colors=colors or ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(80,20,200)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(220,140,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(80,20,200))}
+	local g=Instance.new("UIGradient",obj); g.Color=colors
+	task.spawn(function()
+		local o=0; while obj and obj.Parent do o=(o+speed)%1; g.Offset=Vector2.new(o,0); task.wait(0.03) end
+	end)
+	return g
+end
+
+local methodNames  = {"NEAREST","PRIORITY","HIGHEST"}
+local methodColors = {Color3.fromRGB(80,200,120),Color3.fromRGB(255,180,60),Color3.fromRGB(255,90,200)}
+
+-- ═══════════ GUI ═══════════
+local gui=Instance.new("ScreenGui")
+gui.Name="AlbuxHub_AutoGrab"; gui.ResetOnSpawn=false
+gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; gui.DisplayOrder=99999
+gui.Parent=(gethui and gethui()) or PlayerGui
+
+wrap=Instance.new("Frame",gui)
+wrap.Name="Wrap"; wrap.Size=UDim2.new(0,340,0,200)
+wrap.Position=savedPos; wrap.BackgroundTransparency=1; wrap.ZIndex=1; wrap.ClipsDescendants=false
+
+main=Instance.new("Frame",wrap)
+main.Name="Main"; main.AnchorPoint=Vector2.new(0.5,0.5)
+main.Position=UDim2.new(0.5,0,0.5,0); main.Size=UDim2.new(1,-20,1,-20)
+main.BackgroundColor3=Color3.fromRGB(10,5,20); main.BorderSizePixel=0
+main.ClipsDescendants=true; main.ZIndex=2
+Instance.new("UICorner",main).CornerRadius=UDim.new(0,18)
+
+local glowOuter=Instance.new("UIStroke",main); glowOuter.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+glowOuter.Thickness=8; glowOuter.Transparency=0.75; glowOuter.Color=Color3.fromRGB(220,170,255)
+local gog=Instance.new("UIGradient",glowOuter)
+gog.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(200,150,255)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(255,230,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(200,150,255))}
+local glowMid=Instance.new("UIStroke",main); glowMid.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+glowMid.Thickness=4; glowMid.Transparency=0.4; glowMid.Color=Color3.fromRGB(230,190,255)
+local gmg=Instance.new("UIGradient",glowMid)
+gmg.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(210,160,255)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(255,240,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(210,160,255))}
+local mainStroke=Instance.new("UIStroke",main); mainStroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+mainStroke.Thickness=2; mainStroke.Transparency=0; mainStroke.Color=Color3.fromRGB(255,230,255)
+local msg_g=Instance.new("UIGradient",mainStroke)
+msg_g.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(200,150,255)),ColorSequenceKeypoint.new(0.25,Color3.fromRGB(255,255,255)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(220,180,255)),ColorSequenceKeypoint.new(0.75,Color3.fromRGB(255,255,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(200,150,255))}
+task.spawn(function()
+	local r=0; while main and main.Parent do r=(r+2)%360; msg_g.Rotation=r; gmg.Rotation=r; gog.Rotation=-r; task.wait(0.03) end
+end)
+task.spawn(function()
+	TweenService:Create(mainStroke,TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.4,Thickness=2.8}):Play()
+	TweenService:Create(glowMid,  TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.7,Thickness=6}):Play()
+	TweenService:Create(glowOuter,TweenInfo.new(1.8,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),{Transparency=0.9,Thickness=12}):Play()
+end)
+
+local bgGrad=Instance.new("UIGradient",main)
+bgGrad.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(28,14,56)),ColorSequenceKeypoint.new(0.45,Color3.fromRGB(14,7,32)),ColorSequenceKeypoint.new(1,Color3.fromRGB(6,3,14))}
+bgGrad.Rotation=145
+
+local particleLayer=Instance.new("Frame",main)
+particleLayer.Size=UDim2.new(1,0,1,0); particleLayer.BackgroundTransparency=1
+particleLayer.ClipsDescendants=true; particleLayer.ZIndex=1
+for i=1,8 do
+	local dot=Instance.new("Frame",particleLayer); local sz=math.random(2,4)
+	dot.Size=UDim2.fromOffset(sz,sz); dot.AnchorPoint=Vector2.new(0.5,0.5)
+	dot.Position=UDim2.new(math.random(),0,math.random(),0)
+	dot.BackgroundColor3=Color3.fromRGB(180+math.random(0,75),120,255)
+	dot.BorderSizePixel=0; dot.BackgroundTransparency=0.5+math.random()*0.3; dot.ZIndex=1
+	Instance.new("UICorner",dot).CornerRadius=UDim.new(1,0)
+	task.spawn(function()
+		while dot and dot.Parent do
+			local dur=math.random(40,90)/10
+			Tween(dot,dur,{Position=UDim2.new(math.random(),0,math.random(),0),BackgroundTransparency=0.4+math.random()*0.4},Enum.EasingStyle.Sine,Enum.EasingDirection.InOut)
+			task.wait(dur)
+		end
+	end)
+end
+
+local PAD   = 12
+local INNER = 320-PAD*2  -- 296
+
+-- ═══════════ HEADER ═══════════
+local HEADER_Y=10; local HEADER_H=40
+
+local header=Instance.new("Frame",main)
+header.Size=UDim2.new(0,INNER,0,HEADER_H); header.Position=UDim2.new(0,PAD,0,HEADER_Y)
+header.BackgroundTransparency=1; header.ZIndex=5; header.Active=true
+
+local titleLbl=Instance.new("TextLabel",header)
+titleLbl.Size=UDim2.new(1,-60,1,0); titleLbl.Position=UDim2.new(0,0,0,0)
+titleLbl.BackgroundTransparency=1; titleLbl.Text="ALBUX AUTO GRAB"
+titleLbl.Font=Enum.Font.GothamBlack; titleLbl.TextSize=20
+titleLbl.TextXAlignment=Enum.TextXAlignment.Left; titleLbl.TextColor3=Color3.fromRGB(255,255,255); titleLbl.ZIndex=6
+local titleGrad=Instance.new("UIGradient",titleLbl)
+titleGrad.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(255,180,255)),ColorSequenceKeypoint.new(0.4,Color3.fromRGB(200,130,255)),ColorSequenceKeypoint.new(0.7,Color3.fromRGB(255,210,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(160,80,220))}
+task.spawn(function() local r=0 while titleLbl and titleLbl.Parent do r=(r+1)%360; titleGrad.Rotation=r; task.wait(0.04) end end)
+
+local minBtn=Instance.new("TextButton",header)
+minBtn.Size=UDim2.fromOffset(24,24); minBtn.Position=UDim2.new(1,-52,0.5,-12)
+minBtn.BackgroundColor3=Color3.fromRGB(50,18,110); minBtn.BorderSizePixel=0
+minBtn.Text="—"; minBtn.TextColor3=Color3.fromRGB(220,180,255)
+minBtn.Font=Enum.Font.GothamBlack; minBtn.TextSize=14; minBtn.AutoButtonColor=false; minBtn.ZIndex=7
+Instance.new("UICorner",minBtn).CornerRadius=UDim.new(0,7)
+
+local closeBtn=Instance.new("TextButton",header)
+closeBtn.Size=UDim2.fromOffset(24,24); closeBtn.Position=UDim2.new(1,-24,0.5,-12)
+closeBtn.BackgroundColor3=Color3.fromRGB(80,20,40); closeBtn.BorderSizePixel=0
+closeBtn.Text="X"; closeBtn.TextColor3=Color3.fromRGB(255,180,200)
+closeBtn.Font=Enum.Font.GothamBlack; closeBtn.TextSize=12; closeBtn.AutoButtonColor=false; closeBtn.ZIndex=7
+Instance.new("UICorner",closeBtn).CornerRadius=UDim.new(0,7)
+
+local function MakeSep(yPos)
+	local s=Instance.new("Frame",main)
+	s.Size=UDim2.new(0,INNER,0,1); s.Position=UDim2.new(0,PAD,0,yPos)
+	s.BackgroundColor3=Color3.fromRGB(45,18,95); s.BorderSizePixel=0; s.ZIndex=5
+	local g=Instance.new("UIGradient",s)
+	g.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(20,8,50)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(180,100,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(20,8,50))}
+	return s
+end
+
+MakeSep(HEADER_Y+HEADER_H+6)
+
+-- ═══════════ ELEMENTOS DINÂMICOS ═══════════
+-- Todos os elementos abaixo do header são criados e reposicionados pelo rebuildLayout()
+
+local TAB_GAP=5; local TAB_W=math.floor((INNER-TAB_GAP*2)/3)
+local tabFrames,tabStrokes,tabLabels={},{},{}
+
+local function applyTabVisuals()
+	for i=1,3 do
+		local active=(State.method==i); local col=methodColors[i]
+		if active then
+			Tween(tabFrames[i],.2,{BackgroundColor3=col})
+			Tween(tabStrokes[i],.2,{Color=Color3.fromRGB(255,255,255),Transparency=0.1,Thickness=1.5})
+			tabLabels[i].TextColor3=Color3.fromRGB(255,255,255)
+		else
+			Tween(tabFrames[i],.2,{BackgroundColor3=Color3.fromRGB(16,9,32)})
+			Tween(tabStrokes[i],.2,{Color=col,Transparency=0.55,Thickness=1})
+			tabLabels[i].TextColor3=col
+		end
+	end
+end
+
+for i=1,3 do
+	local x=PAD+(TAB_W+TAB_GAP)*(i-1)
+	local tf=Instance.new("Frame",main)
+	tf.Size=UDim2.new(0,TAB_W,0,32); tf.Position=UDim2.new(0,x,0,0)
+	tf.BackgroundColor3=Color3.fromRGB(16,9,32); tf.BorderSizePixel=0; tf.ZIndex=5; tf.ClipsDescendants=true
+	Instance.new("UICorner",tf).CornerRadius=UDim.new(0,9)
+	local ts=Instance.new("UIStroke",tf)
+	ts.Color=methodColors[i]; ts.Thickness=1; ts.Transparency=0.55; ts.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+	local lbl=Instance.new("TextLabel",tf)
+	lbl.Size=UDim2.new(1,0,1,0); lbl.BackgroundTransparency=1
+	lbl.Text=methodNames[i]; lbl.Font=Enum.Font.GothamBlack; lbl.TextSize=10
+	lbl.TextColor3=methodColors[i]; lbl.ZIndex=6
+	local btn=Instance.new("TextButton",tf)
+	btn.Size=UDim2.new(1,0,1,0); btn.BackgroundTransparency=1; btn.Text=""; btn.AutoButtonColor=false; btn.ZIndex=7
+	btn.MouseButton1Click:Connect(function()
+		State.method=i; State.selectedUID=nil; applyTabVisuals(); SaveConfig()
+		rebuildLayout()
+	end)
+	tabFrames[i]=tf; tabStrokes[i]=ts; tabLabels[i]=lbl
+end
+
+editListBtn=Instance.new("TextButton",main)
+editListBtn.Size=UDim2.new(0,INNER,0,28); editListBtn.BackgroundColor3=Color3.fromRGB(40,25,70)
+editListBtn.BorderSizePixel=0; editListBtn.Text="EDIT PRIORITY LIST"; editListBtn.TextColor3=Color3.fromRGB(255,220,150)
+editListBtn.Font=Enum.Font.GothamBold; editListBtn.TextSize=11; editListBtn.AutoButtonColor=false; editListBtn.ZIndex=5
+Instance.new("UICorner",editListBtn).CornerRadius=UDim.new(0,8)
+local elStr=Instance.new("UIStroke",editListBtn)
+elStr.Color=Color3.fromRGB(255,180,60); elStr.Thickness=1.2; elStr.Transparency=0.4; elStr.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+editListBtn.MouseEnter:Connect(function() Tween(editListBtn,.15,{BackgroundColor3=Color3.fromRGB(60,35,90)}) end)
+editListBtn.MouseLeave:Connect(function() Tween(editListBtn,.15,{BackgroundColor3=Color3.fromRGB(40,25,70)}) end)
+
+local statusCard=Instance.new("Frame",main)
+statusCard.Size=UDim2.new(0,INNER,0,44); statusCard.BackgroundColor3=Color3.fromRGB(16,9,32)
+statusCard.BorderSizePixel=0; statusCard.ZIndex=5; statusCard.ClipsDescendants=true
+Instance.new("UICorner",statusCard).CornerRadius=UDim.new(0,11)
+local scStroke=Instance.new("UIStroke",statusCard)
+scStroke.Color=Color3.fromRGB(100,40,200); scStroke.Thickness=1.2; scStroke.Transparency=0.25; scStroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+local scGrad=Instance.new("UIGradient",statusCard)
+scGrad.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(28,14,60)),ColorSequenceKeypoint.new(1,Color3.fromRGB(12,6,26))}; scGrad.Rotation=90
+
+local statusDot=Instance.new("Frame",statusCard)
+statusDot.Size=UDim2.fromOffset(10,10); statusDot.Position=UDim2.new(0,12,0.5,-5)
+statusDot.BackgroundColor3=Color3.fromRGB(180,120,255); statusDot.BorderSizePixel=0; statusDot.ZIndex=7
+Instance.new("UICorner",statusDot).CornerRadius=UDim.new(1,0)
+local dotGlow=Instance.new("ImageLabel",statusCard)
+dotGlow.AnchorPoint=Vector2.new(0.5,0.5); dotGlow.Position=UDim2.new(0,17,0.5,0); dotGlow.Size=UDim2.fromOffset(24,24)
+dotGlow.BackgroundTransparency=1; dotGlow.Image="rbxassetid://5028857084"; dotGlow.ImageColor3=Color3.fromRGB(180,120,255)
+dotGlow.ImageTransparency=0.3; dotGlow.ScaleType=Enum.ScaleType.Slice; dotGlow.SliceCenter=Rect.new(24,24,276,276); dotGlow.ZIndex=6
+task.spawn(function()
+	while statusDot and statusDot.Parent do
+		TweenService:Create(statusDot,TweenInfo.new(0.9,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,0,true),{Size=UDim2.fromOffset(13,13),Position=UDim2.new(0,10.5,0.5,-6.5)}):Play()
+		TweenService:Create(dotGlow,  TweenInfo.new(0.9,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,0,true),{ImageTransparency=0.55,Size=UDim2.fromOffset(32,32)}):Play()
+		task.wait(1.8)
+	end
+end)
+RunService.Heartbeat:Connect(function() if dotGlow and statusDot then dotGlow.ImageColor3=statusDot.BackgroundColor3 end end)
+
+local statusTopLbl=Instance.new("TextLabel",statusCard)
+statusTopLbl.Text="STATUS"; statusTopLbl.Position=UDim2.new(0,30,0,5); statusTopLbl.Size=UDim2.new(1,-34,0,11)
+statusTopLbl.BackgroundTransparency=1; statusTopLbl.Font=Enum.Font.GothamBold; statusTopLbl.TextSize=8
+statusTopLbl.TextColor3=Color3.fromRGB(140,75,210); statusTopLbl.TextXAlignment=Enum.TextXAlignment.Left; statusTopLbl.ZIndex=7
+
+local statusText=Instance.new("TextLabel",statusCard)
+statusText.Text="Scanning..."; statusText.Position=UDim2.new(0,30,0,17); statusText.Size=UDim2.new(1,-34,0,24)
+statusText.BackgroundTransparency=1; statusText.Font=Enum.Font.GothamBlack; statusText.TextSize=14
+statusText.TextColor3=Color3.fromRGB(235,225,255); statusText.TextXAlignment=Enum.TextXAlignment.Left; statusText.ZIndex=7
+
+local toggleBtn=Instance.new("TextButton",main)
+toggleBtn.Size=UDim2.new(0,INNER,0,36); toggleBtn.BackgroundColor3=Color3.fromRGB(16,9,32)
+toggleBtn.BorderSizePixel=0; toggleBtn.Text="▶  AUTO GRAB ● RUNNING"; toggleBtn.TextColor3=Color3.fromRGB(140,255,180)
+toggleBtn.Font=Enum.Font.GothamBlack; toggleBtn.TextSize=12; toggleBtn.AutoButtonColor=false; toggleBtn.ZIndex=5
+Instance.new("UICorner",toggleBtn).CornerRadius=UDim.new(0,10)
+local toggleGrad=Instance.new("UIGradient",toggleBtn)
+toggleGrad.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(25,14,55)),ColorSequenceKeypoint.new(1,Color3.fromRGB(12,6,28))}; toggleGrad.Rotation=90
+local tStr=Instance.new("UIStroke",toggleBtn)
+tStr.Color=Color3.fromRGB(60,220,130); tStr.Thickness=1.3; tStr.Transparency=0.3; tStr.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+local tPill=Instance.new("Frame",toggleBtn)
+tPill.Size=UDim2.fromOffset(3,18); tPill.Position=UDim2.new(0,10,0.5,-9)
+tPill.BackgroundColor3=Color3.fromRGB(60,220,130); tPill.BorderSizePixel=0; tPill.ZIndex=7
+Instance.new("UICorner",tPill).CornerRadius=UDim.new(0,3)
+toggleBtn.MouseEnter:Connect(function() Tween(toggleBtn,.15,{BackgroundColor3=Color3.fromRGB(30,18,60)}) end)
+toggleBtn.MouseLeave:Connect(function() Tween(toggleBtn,.15,{BackgroundColor3=Color3.fromRGB(16,9,32)}) end)
+
+local pbBg=Instance.new("Frame",main)
+pbBg.Size=UDim2.new(0,INNER,0,6); pbBg.BackgroundColor3=Color3.fromRGB(22,10,48); pbBg.BorderSizePixel=0; pbBg.ZIndex=5
+Instance.new("UICorner",pbBg).CornerRadius=UDim.new(1,0)
+progressFill=Instance.new("Frame",pbBg)
+progressFill.Size=UDim2.new(0,0,1,0); progressFill.BackgroundColor3=Color3.fromRGB(160,80,255); progressFill.BorderSizePixel=0; progressFill.ZIndex=6
+Instance.new("UICorner",progressFill).CornerRadius=UDim.new(1,0)
+AnimGradient(progressFill,0.012,ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(100,30,220)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(220,140,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(100,30,220))})
+
+local sep2=MakeSep(0) -- posição será definida pelo rebuildLayout
+
+-- SCROLL LIST
+local ROW_H2=62; local ROW_GAP=5; local VISIBLE_ROWS=6
+local SCROLL_H=VISIBLE_ROWS*(ROW_H2+ROW_GAP)-ROW_GAP
+
+local stScrollFrame=Instance.new("ScrollingFrame",main)
+stScrollFrame.Size=UDim2.new(0,INNER,0,SCROLL_H); stScrollFrame.BackgroundTransparency=1
+stScrollFrame.BorderSizePixel=0; stScrollFrame.ScrollBarThickness=4
+stScrollFrame.ScrollBarImageColor3=Color3.fromRGB(160,80,255)
+stScrollFrame.CanvasSize=UDim2.new(0,0,0,0); stScrollFrame.ZIndex=5
+stScrollFrame.ScrollingDirection=Enum.ScrollingDirection.Y; stScrollFrame.ClipsDescendants=true
+local stLayout=Instance.new("UIListLayout",stScrollFrame)
+stLayout.Padding=UDim.new(0,ROW_GAP); stLayout.SortOrder=Enum.SortOrder.LayoutOrder
+
+local stEmptyLbl=Instance.new("TextLabel",main)
+stEmptyLbl.Size=UDim2.new(0,INNER,0,60); stEmptyLbl.BackgroundTransparency=1
+stEmptyLbl.Text="No brainrots found in this server..."
+stEmptyLbl.Font=Enum.Font.GothamBold; stEmptyLbl.TextSize=13
+stEmptyLbl.TextColor3=Color3.fromRGB(120,80,180); stEmptyLbl.ZIndex=6; stEmptyLbl.Visible=false
+
+local discBar=Instance.new("Frame",main)
+discBar.Size=UDim2.new(0,INNER,0,34); discBar.BackgroundColor3=Color3.fromRGB(40,16,100)
+discBar.BorderSizePixel=0; discBar.ZIndex=5; discBar.ClipsDescendants=true
+Instance.new("UICorner",discBar).CornerRadius=UDim.new(0,11)
+AnimGradient(discBar,0.008,ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(45,16,120)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(110,50,220)),ColorSequenceKeypoint.new(1,Color3.fromRGB(45,16,120))})
+local ds=Instance.new("UIStroke",discBar); ds.Color=Color3.fromRGB(160,90,255); ds.Thickness=1.2; ds.Transparency=0.2; ds.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+local discText=Instance.new("TextLabel",discBar)
+discText.Size=UDim2.new(1,-60,1,0); discText.Position=UDim2.new(0,12,0,0); discText.BackgroundTransparency=1
+discText.Text="discord.gg/albuxhub"; discText.Font=Enum.Font.GothamBold; discText.TextSize=11
+discText.TextColor3=Color3.fromRGB(255,255,255); discText.TextXAlignment=Enum.TextXAlignment.Left; discText.ZIndex=8
+local copyBtn=Instance.new("TextButton",discBar)
+copyBtn.Size=UDim2.fromOffset(46,22); copyBtn.Position=UDim2.new(1,-52,0.5,-11)
+copyBtn.BackgroundColor3=Color3.fromRGB(80,30,180); copyBtn.BorderSizePixel=0
+copyBtn.Text="COPY"; copyBtn.TextColor3=Color3.fromRGB(255,230,255)
+copyBtn.Font=Enum.Font.GothamBold; copyBtn.TextSize=10; copyBtn.ZIndex=9; copyBtn.AutoButtonColor=false
+Instance.new("UICorner",copyBtn).CornerRadius=UDim.new(0,7)
+copyBtn.MouseButton1Click:Connect(function()
+	if setclipboard then setclipboard("discord.gg/albuxhub"); copyBtn.Text="OK!"; task.wait(1.5); copyBtn.Text="COPY" end
+end)
+
+-- ═══════════════════════════════════════
+-- rebuildLayout — reposiciona tudo
+-- FIX bug 1: agora controla Visible de cada elemento individualmente
+-- ═══════════════════════════════════════
+local function rebuildLayout(minimized)
+	local y = HEADER_Y+HEADER_H+6+1+8  -- após sep1
+
+	if minimized then
+		-- esconde tudo menos header e discord
+		for i=1,3 do tabFrames[i].Visible=false end
+		editListBtn.Visible=false
+		statusCard.Visible=false
+		toggleBtn.Visible=false
+		pbBg.Visible=false
+		sep2.Visible=false
+		stScrollFrame.Visible=false
+		stEmptyLbl.Visible=false
+		discBar.Visible=true
+		discBar.Position=UDim2.new(0,PAD,0,y)
+		local totalH=y+34+8
+		Tween(main,.25,{Size=UDim2.new(1,-20,0,totalH)})
+		Tween(wrap,.25,{Size=UDim2.new(0,340,0,totalH+20)})
+		return
+	end
+
+	-- mostra tudo
+	for i=1,3 do tabFrames[i].Visible=true end
+	statusCard.Visible=true
+	toggleBtn.Visible=true
+	pbBg.Visible=true
+	sep2.Visible=true
+	stScrollFrame.Visible=true
+	discBar.Visible=true
+
+	-- tabs
+	for i=1,3 do
+		local x=PAD+(TAB_W+TAB_GAP)*(i-1)
+		tabFrames[i].Position=UDim2.new(0,x,0,y)
+	end
+	y=y+32+8
+
+	-- edit priority btn (só se método 2)
+	if State.method==2 then
+		editListBtn.Position=UDim2.new(0,PAD,0,y)
+		editListBtn.Visible=true
+		y=y+28+8
+	else
+		editListBtn.Visible=false
+	end
+
+	-- status
+	statusCard.Position=UDim2.new(0,PAD,0,y); y=y+44+8
+
+	-- toggle
+	toggleBtn.Position=UDim2.new(0,PAD,0,y); y=y+36+6
+
+	-- progress
+	pbBg.Position=UDim2.new(0,PAD,0,y); y=y+6+10
+
+	-- sep2
+	sep2.Position=UDim2.new(0,PAD,0,y); y=y+1+10
+
+	-- scroll list
+	stScrollFrame.Position=UDim2.new(0,PAD,0,y)
+	stEmptyLbl.Position=UDim2.new(0,PAD,0,y+40)
+	y=y+SCROLL_H+10
+
+	-- discord
+	discBar.Position=UDim2.new(0,PAD,0,y); y=y+34+8
+
+	local totalH=y
+	Tween(main,.25,{Size=UDim2.new(1,-20,0,totalH)})
+	Tween(wrap,.25,{Size=UDim2.new(0,340,0,totalH+20)})
+end
+
+-- ═══════════ ROW POOL ═══════════
+local rowPool={}
+local refreshStealTargets
+
+local function createRow(lo)
+	local row=Instance.new("Frame",stScrollFrame)
+	row.Size=UDim2.new(1,0,0,ROW_H2); row.BackgroundColor3=Color3.fromRGB(16,9,32)
+	row.BorderSizePixel=0; row.ZIndex=5; row.ClipsDescendants=true; row.LayoutOrder=lo
+	Instance.new("UICorner",row).CornerRadius=UDim.new(0,13)
+	local rg=Instance.new("UIGradient",row)
+	rg.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(28,14,60)),ColorSequenceKeypoint.new(1,Color3.fromRGB(12,6,26))}; rg.Rotation=90
+	local rStroke=Instance.new("UIStroke",row)
+	rStroke.Color=Color3.fromRGB(80,40,160); rStroke.Thickness=1.2; rStroke.Transparency=0.4; rStroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+
+	local clickBtn=Instance.new("TextButton",row)
+	clickBtn.Size=UDim2.new(1,0,1,0); clickBtn.BackgroundTransparency=1; clickBtn.Text=""; clickBtn.AutoButtonColor=false; clickBtn.ZIndex=10
+
+	local rankBadge=Instance.new("Frame",row)
+	rankBadge.Size=UDim2.fromOffset(28,28); rankBadge.Position=UDim2.new(0,9,0.5,-14)
+	rankBadge.BackgroundColor3=Color3.fromRGB(80,40,160); rankBadge.BorderSizePixel=0; rankBadge.ZIndex=7
+	Instance.new("UICorner",rankBadge).CornerRadius=UDim.new(0,7)
+	local rankLbl=Instance.new("TextLabel",rankBadge)
+	rankLbl.Size=UDim2.new(1,0,1,0); rankLbl.BackgroundTransparency=1
+	rankLbl.Text="#1"; rankLbl.Font=Enum.Font.GothamBlack; rankLbl.TextSize=11; rankLbl.TextColor3=Color3.fromRGB(255,255,255); rankLbl.ZIndex=8
+
+	local prioTag=Instance.new("Frame",row)
+	prioTag.Size=UDim2.fromOffset(52,15); prioTag.Position=UDim2.new(1,-60,0,7)
+	prioTag.BackgroundColor3=Color3.fromRGB(255,180,60); prioTag.BorderSizePixel=0; prioTag.ZIndex=7; prioTag.Visible=false
+	Instance.new("UICorner",prioTag).CornerRadius=UDim.new(0,4)
+	local prioLbl=Instance.new("TextLabel",prioTag)
+	prioLbl.Size=UDim2.new(1,0,1,0); prioLbl.BackgroundTransparency=1; prioLbl.Text="PRIORITY"
+	prioLbl.Font=Enum.Font.GothamBlack; prioLbl.TextSize=8; prioLbl.TextColor3=Color3.fromRGB(20,10,5); prioLbl.ZIndex=8
+
+	local selTag=Instance.new("Frame",row)
+	selTag.Size=UDim2.fromOffset(12,12); selTag.Position=UDim2.new(1,-18,1,-16)
+	selTag.BackgroundColor3=Color3.fromRGB(80,255,150); selTag.BorderSizePixel=0; selTag.ZIndex=9; selTag.Visible=false
+	Instance.new("UICorner",selTag).CornerRadius=UDim.new(1,0)
+	local sg=Instance.new("ImageLabel",selTag)
+	sg.AnchorPoint=Vector2.new(0.5,0.5); sg.Position=UDim2.new(0.5,0,0.5,0); sg.Size=UDim2.fromOffset(24,24)
+	sg.BackgroundTransparency=1; sg.Image="rbxassetid://5028857084"; sg.ImageColor3=Color3.fromRGB(80,255,150)
+	sg.ImageTransparency=0.4; sg.ScaleType=Enum.ScaleType.Slice; sg.SliceCenter=Rect.new(24,24,276,276); sg.ZIndex=8
+
+	local nameLbl=Instance.new("TextLabel",row)
+	nameLbl.Size=UDim2.new(1,-120,0,20); nameLbl.Position=UDim2.new(0,44,0,7)
+	nameLbl.BackgroundTransparency=1; nameLbl.Text="---"
+	nameLbl.Font=Enum.Font.GothamBlack; nameLbl.TextSize=14; nameLbl.TextColor3=Color3.fromRGB(235,225,255)
+	nameLbl.TextXAlignment=Enum.TextXAlignment.Left; nameLbl.TextTruncate=Enum.TextTruncate.AtEnd; nameLbl.ZIndex=7
+
+	-- linha 2: income + mutation LADO A LADO
+	local incomeLbl=Instance.new("TextLabel",row)
+	incomeLbl.Size=UDim2.new(0,105,0,15); incomeLbl.Position=UDim2.new(0,44,0,30)
+	incomeLbl.BackgroundTransparency=1; incomeLbl.Text=""
+	incomeLbl.Font=Enum.Font.GothamBold; incomeLbl.TextSize=11; incomeLbl.TextColor3=Color3.fromRGB(130,210,140)
+	incomeLbl.TextXAlignment=Enum.TextXAlignment.Left; incomeLbl.ZIndex=7
+
+	-- mutation badge ao lado do income (posição X após income ~155px)
+	local mutBadge=Instance.new("Frame",row)
+	mutBadge.Size=UDim2.fromOffset(0,18); mutBadge.Position=UDim2.new(0,152,0,28)
+	mutBadge.BackgroundTransparency=1; mutBadge.BorderSizePixel=0; mutBadge.ZIndex=7
+	mutBadge.AutomaticSize=Enum.AutomaticSize.X; mutBadge.Visible=false
+	Instance.new("UICorner",mutBadge).CornerRadius=UDim.new(0,5)
+	local mutPad=Instance.new("UIPadding",mutBadge)
+	mutPad.PaddingLeft=UDim.new(0,5); mutPad.PaddingRight=UDim.new(0,5)
+	local mutLbl=Instance.new("TextLabel",mutBadge)
+	mutLbl.Size=UDim2.new(1,0,1,0); mutLbl.BackgroundTransparency=1; mutLbl.Text=""
+	mutLbl.Font=Enum.Font.GothamBlack; mutLbl.TextSize=11; mutLbl.TextColor3=Color3.fromRGB(255,200,0)
+	mutLbl.TextXAlignment=Enum.TextXAlignment.Center; mutLbl.ZIndex=8; mutLbl.AutomaticSize=Enum.AutomaticSize.X
+
+	local rd={
+		row=row, clickBtn=clickBtn,
+		rankBadge=rankBadge, rankLbl=rankLbl,
+		prioTag=prioTag, selTag=selTag,
+		nameLbl=nameLbl, incomeLbl=incomeLbl,
+		mutBadge=mutBadge, mutLbl=mutLbl,
+		stroke=rStroke,
+		entryUID=nil,   -- FIX bug 2: guarda UID
+		entryName=nil,
+	}
+
+	clickBtn.MouseEnter:Connect(function()
+		if row.Visible then Tween(row,.12,{BackgroundColor3=Color3.fromRGB(30,18,60)}); Tween(rStroke,.12,{Transparency=0,Thickness=1.8}) end
+	end)
+	clickBtn.MouseLeave:Connect(function()
+		if row.Visible then
+			local isSel=(rd.entryUID and State.selectedUID==rd.entryUID)
+			if isSel then Tween(row,.12,{BackgroundColor3=Color3.fromRGB(20,40,30)}); Tween(rStroke,.12,{Transparency=0,Thickness=2})
+			else Tween(row,.12,{BackgroundColor3=Color3.fromRGB(16,9,32)}); Tween(rStroke,.12,{Transparency=0.4,Thickness=1.2}) end
+		end
+	end)
+
+	-- FIX bug 2: toggle por UID exato
+	clickBtn.MouseButton1Click:Connect(function()
+		local uid=rd.entryUID; if not uid then return end
+		if State.selectedUID==uid then
+			State.selectedUID=nil
+		else
+			State.selectedUID=uid
+			State.selectionChanged=true
+			State.isStealing=false
+		end
+		SaveConfig(); refreshStealTargets()
+	end)
+
+	return rd
+end
+
+local function applyRow(rd, entry, idx)
+	rd.entryUID  = entry.uid   -- FIX bug 2
+	rd.entryName = entry.name
+	rd.rankLbl.Text="#"..idx
+	rd.nameLbl.Text=entry.name
+	rd.incomeLbl.Text="$"..formatMoney(entry.income).."/s"
+
+	local mc=getMutColor(entry.mutation)
+	local ml=getMutLabel(entry.mutation)
+	if ml and mc then
+		rd.mutLbl.Text="✦ "..ml
+		rd.mutLbl.TextColor3=mc
+		rd.mutBadge.BackgroundColor3=Color3.new(mc.R*0.18,mc.G*0.18,mc.B*0.18)
+		rd.mutBadge.BackgroundTransparency=0.08
+		local mstr=rd.mutBadge:FindFirstChildOfClass("UIStroke")
+		if not mstr then
+			mstr=Instance.new("UIStroke",rd.mutBadge)
+			mstr.ApplyStrokeMode=Enum.ApplyStrokeMode.Border; mstr.Thickness=1.3; mstr.Transparency=0.05
+		end
+		mstr.Color=mc; rd.mutBadge.Visible=true
+	else
+		rd.mutBadge.Visible=false; rd.mutLbl.Text=""
+	end
+
+	rd.prioTag.Visible=entry.isPriority
+
+	-- FIX bug 2: compara UID
+	local isSel=(State.selectedUID==entry.uid)
+	rd.selTag.Visible=isSel
+
+	if isSel then
+		rd.rankBadge.BackgroundColor3=Color3.fromRGB(60,220,130)
+		rd.stroke.Color=Color3.fromRGB(80,255,150); rd.stroke.Transparency=0; rd.stroke.Thickness=2
+		rd.row.BackgroundColor3=Color3.fromRGB(20,40,30); rd.nameLbl.TextColor3=Color3.fromRGB(180,255,220)
+	elseif entry.isPriority then
+		rd.rankBadge.BackgroundColor3=Color3.fromRGB(255,160,40)
+		rd.stroke.Color=Color3.fromRGB(255,180,60); rd.stroke.Transparency=0.2; rd.stroke.Thickness=1.2
+		rd.row.BackgroundColor3=Color3.fromRGB(16,9,32); rd.nameLbl.TextColor3=Color3.fromRGB(255,230,180)
+	else
+		rd.rankBadge.BackgroundColor3=Color3.fromRGB(80,40,160)
+		rd.stroke.Color=Color3.fromRGB(80,40,160); rd.stroke.Transparency=0.4; rd.stroke.Thickness=1.2
+		rd.row.BackgroundColor3=Color3.fromRGB(16,9,32); rd.nameLbl.TextColor3=Color3.fromRGB(235,225,255)
+	end
+end
+
+refreshStealTargets=function()
+	local _,allVisible=collectBrainrots()
+	table.sort(allVisible,function(a,b)
+		if a.income==b.income then return a.name<b.name end; return a.income>b.income
+	end)
+
+	local combined,usedUIDs={},{}
+	for _,wn in ipairs(State.priorityList) do
+		for _,p in ipairs(allVisible) do
+			if p.name==wn and not usedUIDs[p.uid] then
+				usedUIDs[p.uid]=true
+				table.insert(combined,{name=p.name,income=p.income,isPriority=true,prompt=p.prompt,mutation=p.mutation,uid=p.uid})
+			end
+		end
+	end
+	for _,p in ipairs(allVisible) do
+		if not usedUIDs[p.uid] then
+			usedUIDs[p.uid]=true
+			table.insert(combined,{name=p.name,income=p.income,isPriority=false,prompt=p.prompt,mutation=p.mutation,uid=p.uid})
+		end
+	end
+
+	local count=#combined
+	while #rowPool<count do table.insert(rowPool,createRow(#rowPool+1)) end
+
+	for i,rd in ipairs(rowPool) do
+		if i<=count then
+			rd.row.LayoutOrder=i; rd.row.Visible=true
+			applyRow(rd,combined[i],i)
+		else
+			rd.row.Visible=false; rd.entryUID=nil; rd.entryName=nil
+		end
+	end
+
+	local totalH=count*(ROW_H2+ROW_GAP)-ROW_GAP
+	stScrollFrame.CanvasSize=UDim2.new(0,0,0,math.max(0,totalH+4))
+	stEmptyLbl.Visible=(count==0)
+end
+
+task.spawn(function()
+	while true do
+		if not State.guiClosed then refreshStealTargets() end
+		task.wait(2)
+	end
+end)
+
+-- ═══════════ PRIORITY LIST POPUP ═══════════
+local function isInPriority(name)
+	for _,n in ipairs(State.priorityList) do if n==name then return true end end; return false
+end
+local function removeFromPriority(name)
+	for i,n in ipairs(State.priorityList) do if n==name then table.remove(State.priorityList,i); return end end
+end
+local function addToPriority(name)
+	if not isInPriority(name) then table.insert(State.priorityList,name) end
+end
+local function moveInPriority(name,dir)
+	for i,n in ipairs(State.priorityList) do
+		if n==name then
+			local ni=i+dir
+			if ni>=1 and ni<=#State.priorityList then State.priorityList[i]=State.priorityList[ni]; State.priorityList[ni]=name end
+			return
+		end
+	end
+end
+
+local searchText=""
+local rebuildList
+local cachedBrainrots=nil
+
+listPanel=Instance.new("Frame",gui)
+listPanel.Name="PriorityListPanel"; listPanel.Size=UDim2.new(0,390,0,500)
+listPanel.AnchorPoint=Vector2.new(0.5,0.5); listPanel.Position=UDim2.new(0.5,0,0.5,0)
+listPanel.BackgroundColor3=Color3.fromRGB(10,5,20); listPanel.BorderSizePixel=0
+listPanel.ZIndex=200; listPanel.Visible=false; listPanel.Active=true
+Instance.new("UICorner",listPanel).CornerRadius=UDim.new(0,16)
+local lpStr=Instance.new("UIStroke",listPanel); lpStr.Color=Color3.fromRGB(255,180,60); lpStr.Thickness=2; lpStr.Transparency=0.1; lpStr.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+local lpGrad=Instance.new("UIGradient",listPanel)
+lpGrad.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(30,18,55)),ColorSequenceKeypoint.new(1,Color3.fromRGB(10,5,20))}; lpGrad.Rotation=145
+
+local lpHeader=Instance.new("Frame",listPanel)
+lpHeader.Size=UDim2.new(1,-20,0,36); lpHeader.Position=UDim2.new(0,10,0,10)
+lpHeader.BackgroundTransparency=1; lpHeader.ZIndex=201; lpHeader.Active=true
+local lpTitle=Instance.new("TextLabel",lpHeader)
+lpTitle.Size=UDim2.new(1,-40,1,0); lpTitle.BackgroundTransparency=1; lpTitle.Text="PRIORITY LIST"
+lpTitle.Font=Enum.Font.GothamBlack; lpTitle.TextSize=18; lpTitle.TextColor3=Color3.fromRGB(255,220,150)
+lpTitle.TextXAlignment=Enum.TextXAlignment.Left; lpTitle.ZIndex=202
+local lpClose=Instance.new("TextButton",lpHeader)
+lpClose.Size=UDim2.fromOffset(28,28); lpClose.Position=UDim2.new(1,-28,0.5,-14)
+lpClose.BackgroundColor3=Color3.fromRGB(80,20,40); lpClose.Text="X"; lpClose.Font=Enum.Font.GothamBlack; lpClose.TextSize=14
+lpClose.TextColor3=Color3.fromRGB(255,180,200); lpClose.AutoButtonColor=false; lpClose.ZIndex=202
+Instance.new("UICorner",lpClose).CornerRadius=UDim.new(0,8)
+lpClose.MouseButton1Click:Connect(function() listPanel.Visible=false; listVisible=false end)
+
+local searchBox=Instance.new("TextBox",listPanel)
+searchBox.Size=UDim2.new(1,-20,0,32); searchBox.Position=UDim2.new(0,10,0,52)
+searchBox.BackgroundColor3=Color3.fromRGB(20,12,40); searchBox.Text=""; searchBox.PlaceholderText="Search brainrots..."
+searchBox.PlaceholderColor3=Color3.fromRGB(120,90,180); searchBox.TextColor3=Color3.fromRGB(230,220,255)
+searchBox.Font=Enum.Font.Gotham; searchBox.TextSize=12; searchBox.ClearTextOnFocus=false; searchBox.ZIndex=201
+Instance.new("UICorner",searchBox).CornerRadius=UDim.new(0,8)
+local sbStr=Instance.new("UIStroke",searchBox); sbStr.Color=Color3.fromRGB(140,80,220); sbStr.Thickness=1; sbStr.Transparency=0.5; sbStr.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+local sbPad=Instance.new("UIPadding",searchBox); sbPad.PaddingLeft=UDim.new(0,10); sbPad.PaddingRight=UDim.new(0,10)
+
+local refreshBtnP=Instance.new("TextButton",listPanel)
+refreshBtnP.Size=UDim2.new(1,-20,0,26); refreshBtnP.Position=UDim2.new(0,10,0,90)
+refreshBtnP.BackgroundColor3=Color3.fromRGB(35,22,70); refreshBtnP.Text="REFRESH LIST"
+refreshBtnP.Font=Enum.Font.GothamBold; refreshBtnP.TextSize=10
+refreshBtnP.TextColor3=Color3.fromRGB(200,170,255); refreshBtnP.AutoButtonColor=false; refreshBtnP.ZIndex=201
+Instance.new("UICorner",refreshBtnP).CornerRadius=UDim.new(0,7)
+
+local scroll=Instance.new("ScrollingFrame",listPanel)
+scroll.Size=UDim2.new(1,-20,1,-160); scroll.Position=UDim2.new(0,10,0,124)
+scroll.BackgroundColor3=Color3.fromRGB(14,8,28); scroll.BorderSizePixel=0; scroll.ScrollBarThickness=5
+scroll.ScrollBarImageColor3=Color3.fromRGB(180,100,255); scroll.CanvasSize=UDim2.new(0,0,0,0); scroll.ZIndex=201; scroll.Active=true
+Instance.new("UICorner",scroll).CornerRadius=UDim.new(0,10)
+local layoutL=Instance.new("UIListLayout",scroll); layoutL.Padding=UDim.new(0,4); layoutL.SortOrder=Enum.SortOrder.LayoutOrder
+local lpPad=Instance.new("UIPadding",scroll)
+lpPad.PaddingTop=UDim.new(0,6); lpPad.PaddingBottom=UDim.new(0,6); lpPad.PaddingLeft=UDim.new(0,6); lpPad.PaddingRight=UDim.new(0,6)
+
+local footer=Instance.new("TextLabel",listPanel)
+footer.Size=UDim2.new(1,-20,0,18); footer.Position=UDim2.new(0,10,1,-28)
+footer.BackgroundTransparency=1; footer.Text=""; footer.Font=Enum.Font.GothamBold; footer.TextSize=11
+footer.TextColor3=Color3.fromRGB(255,200,130); footer.ZIndex=201
+
+local pDrag,pStart,pOrig=false,nil,nil
+lpHeader.InputBegan:Connect(function(i)
+	if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+		pDrag=true; pStart=i.Position; pOrig=listPanel.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(i)
+	if pDrag and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+		local d=i.Position-pStart
+		listPanel.Position=UDim2.new(pOrig.X.Scale,pOrig.X.Offset+d.X,pOrig.Y.Scale,pOrig.Y.Offset+d.Y)
+	end
+end)
+UserInputService.InputEnded:Connect(function(i)
+	if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then pDrag=false end
+end)
+
+rebuildList=function()
+	if not cachedBrainrots then cachedBrainrots=getAllBrainrots() end
+	for _,c in ipairs(scroll:GetChildren()) do if c:IsA("Frame") then c:Destroy() end end
+	local order,total=0,0
+	for idx,name in ipairs(State.priorityList) do
+		if searchText=="" or string.find(string.lower(name),string.lower(searchText),1,true) then
+			order=order+1
+			local row=Instance.new("Frame",scroll); row.Size=UDim2.new(1,-8,0,36)
+			row.BackgroundColor3=Color3.fromRGB(40,28,70); row.BorderSizePixel=0; row.LayoutOrder=order; row.ZIndex=202
+			Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
+			local rs=Instance.new("UIStroke",row); rs.Color=Color3.fromRGB(255,180,60); rs.Thickness=1; rs.Transparency=0.3; rs.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+			local rank=Instance.new("TextLabel",row); rank.Size=UDim2.fromOffset(26,26); rank.Position=UDim2.new(0,6,0.5,-13)
+			rank.BackgroundColor3=Color3.fromRGB(255,180,60); rank.Text=tostring(idx); rank.Font=Enum.Font.GothamBlack; rank.TextSize=12
+			rank.TextColor3=Color3.fromRGB(20,10,5); rank.ZIndex=203; Instance.new("UICorner",rank).CornerRadius=UDim.new(0,6)
+			local lbl=Instance.new("TextLabel",row); lbl.Size=UDim2.new(1,-120,1,0); lbl.Position=UDim2.new(0,38,0,0)
+			lbl.BackgroundTransparency=1; lbl.Text=name; lbl.Font=Enum.Font.GothamBold; lbl.TextSize=12
+			lbl.TextColor3=Color3.fromRGB(255,230,200); lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.ZIndex=203
+			local upBtn=Instance.new("TextButton",row); upBtn.Size=UDim2.fromOffset(22,22); upBtn.Position=UDim2.new(1,-80,0.5,-11)
+			upBtn.BackgroundColor3=Color3.fromRGB(60,40,100); upBtn.Text="↑"; upBtn.Font=Enum.Font.GothamBold; upBtn.TextSize=13
+			upBtn.TextColor3=Color3.fromRGB(255,220,150); upBtn.AutoButtonColor=false; upBtn.ZIndex=203
+			Instance.new("UICorner",upBtn).CornerRadius=UDim.new(0,5)
+			upBtn.MouseButton1Click:Connect(function() moveInPriority(name,-1); SaveConfig(); rebuildList() end)
+			local dnBtn=Instance.new("TextButton",row); dnBtn.Size=UDim2.fromOffset(22,22); dnBtn.Position=UDim2.new(1,-56,0.5,-11)
+			dnBtn.BackgroundColor3=Color3.fromRGB(60,40,100); dnBtn.Text="↓"; dnBtn.Font=Enum.Font.GothamBold; dnBtn.TextSize=13
+			dnBtn.TextColor3=Color3.fromRGB(255,220,150); dnBtn.AutoButtonColor=false; dnBtn.ZIndex=203
+			Instance.new("UICorner",dnBtn).CornerRadius=UDim.new(0,5)
+			dnBtn.MouseButton1Click:Connect(function() moveInPriority(name,1); SaveConfig(); rebuildList() end)
+			local rm=Instance.new("TextButton",row); rm.Size=UDim2.fromOffset(22,22); rm.Position=UDim2.new(1,-30,0.5,-11)
+			rm.BackgroundColor3=Color3.fromRGB(100,25,45); rm.Text="X"; rm.Font=Enum.Font.GothamBold; rm.TextSize=12
+			rm.TextColor3=Color3.fromRGB(255,180,200); rm.AutoButtonColor=false; rm.ZIndex=203
+			Instance.new("UICorner",rm).CornerRadius=UDim.new(0,5)
+			rm.MouseButton1Click:Connect(function() removeFromPriority(name); SaveConfig(); rebuildList() end)
+			total=total+1
+		end
+	end
+	if #State.priorityList>0 then
+		local sep=Instance.new("Frame",scroll); sep.Size=UDim2.new(1,-10,0,1); sep.BackgroundColor3=Color3.fromRGB(80,50,140)
+		sep.BorderSizePixel=0; sep.LayoutOrder=order+1; sep.ZIndex=202; order=order+1
+	end
+	for _,name in ipairs(cachedBrainrots) do
+		if not isInPriority(name) then
+			if searchText=="" or string.find(string.lower(name),string.lower(searchText),1,true) then
+				order=order+1
+				local row=Instance.new("Frame",scroll); row.Size=UDim2.new(1,-8,0,32)
+				row.BackgroundColor3=Color3.fromRGB(18,12,36); row.BorderSizePixel=0; row.LayoutOrder=order; row.ZIndex=202
+				Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
+				local rs=Instance.new("UIStroke",row); rs.Color=Color3.fromRGB(60,30,120); rs.Thickness=1; rs.Transparency=0.5; rs.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+				local lbl=Instance.new("TextLabel",row); lbl.Size=UDim2.new(1,-50,1,0); lbl.Position=UDim2.new(0,12,0,0)
+				lbl.BackgroundTransparency=1; lbl.Text=name; lbl.Font=Enum.Font.GothamMedium; lbl.TextSize=12
+				lbl.TextColor3=Color3.fromRGB(200,180,230); lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.ZIndex=203
+				local add=Instance.new("TextButton",row); add.Size=UDim2.fromOffset(34,22); add.Position=UDim2.new(1,-40,0.5,-11)
+				add.BackgroundColor3=Color3.fromRGB(40,25,80); add.Text="+"; add.Font=Enum.Font.GothamBlack; add.TextSize=14
+				add.TextColor3=Color3.fromRGB(180,255,200); add.AutoButtonColor=false; add.ZIndex=203
+				Instance.new("UICorner",add).CornerRadius=UDim.new(0,6)
+				local ast=Instance.new("UIStroke",add); ast.Color=Color3.fromRGB(80,200,120); ast.Thickness=1; ast.Transparency=0.4; ast.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+				add.MouseButton1Click:Connect(function() addToPriority(name); SaveConfig(); rebuildList() end)
+				total=total+1
+			end
+		end
+	end
+	scroll.CanvasSize=UDim2.new(0,0,0,layoutL.AbsoluteContentSize.Y+12)
+	footer.Text=string.format("Showing %d / %d  •  %d in priority",total,#cachedBrainrots,#State.priorityList)
+end
+
+searchBox:GetPropertyChangedSignal("Text"):Connect(function() searchText=searchBox.Text; rebuildList() end)
+refreshBtnP.MouseButton1Click:Connect(function()
+	cachedBrainrots=getAllBrainrots()
+	refreshBtnP.Text=string.format("FOUND %d",#cachedBrainrots)
+	task.delay(2,function() refreshBtnP.Text="REFRESH LIST" end)
+	rebuildList()
+end)
+editListBtn.MouseButton1Click:Connect(function()
+	listVisible=not listVisible; listPanel.Visible=listVisible
+	if listVisible then cachedBrainrots=getAllBrainrots(); rebuildList() end
+end)
+
+-- ═══════════ ACTIONS ═══════════
+local function setAutoGrab(on)
+	State.autoStealEnabled=on
+	if on then
+		toggleBtn.Text="▶  AUTO GRAB ● RUNNING"; toggleBtn.TextColor3=Color3.fromRGB(140,255,180)
+		tPill.BackgroundColor3=Color3.fromRGB(60,220,130); Tween(tStr,.2,{Color=Color3.fromRGB(60,220,130),Transparency=0.3})
+		statusText.Text="Scanning..."; statusText.TextColor3=Color3.fromRGB(235,225,255)
+		statusDot.BackgroundColor3=Color3.fromRGB(180,120,255)
+	else
+		toggleBtn.Text="❚❚  AUTO GRAB ● PAUSED"; toggleBtn.TextColor3=Color3.fromRGB(255,100,100)
+		tPill.BackgroundColor3=Color3.fromRGB(230,60,60); Tween(tStr,.2,{Color=Color3.fromRGB(220,50,50),Transparency=0.35})
+		statusText.Text="Paused"; statusText.TextColor3=Color3.fromRGB(255,90,90)
+		statusDot.BackgroundColor3=Color3.fromRGB(255,60,60)
+		progressFill.Size=UDim2.new(0,0,1,0)
+	end
+end
+
+local function executeSteal(prompt)
+	if State.isStealing or not prompt or not prompt.Parent then return end
+	State.isStealing=true; State.selectionChanged=false
+	statusText.Text="Stealing: "..(prompt.ObjectText or "?")
+	statusText.TextColor3=Color3.fromRGB(195,135,255); statusDot.BackgroundColor3=Color3.fromRGB(180,100,255)
+	fireConn(prompt,"PromptButtonHoldBegan")
+	progressFill.Size=UDim2.new(0,0,1,0)
+	local tw=TweenService:Create(progressFill,TweenInfo.new(State.stealDelay,Enum.EasingStyle.Linear),{Size=UDim2.new(1,0,1,0)})
+	tw:Play()
+	local elapsed,step=0,0.05
+	while elapsed<State.stealDelay do
+		task.wait(step); elapsed=elapsed+step
+		if State.selectionChanged then tw:Cancel(); progressFill.Size=UDim2.new(0,0,1,0); State.isStealing=false; State.selectionChanged=false; return end
+	end
+	if prompt and prompt.Parent and prompt.Enabled and not State.selectionChanged then fireConn(prompt,"Triggered") end
+	progressFill.Size=UDim2.new(0,0,1,0); State.isStealing=false
+end
+
+toggleBtn.MouseButton1Click:Connect(function() setAutoGrab(not State.autoStealEnabled) end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	State.guiClosed=true; State.autoStealEnabled=false; State.isStealing=false; gui.Enabled=false
+end)
+
+-- ═══════════ MINIMIZE (FIX bug 1) ═══════════
+minBtn.MouseButton1Click:Connect(function()
+	State.minimized = not State.minimized
+	if State.minimized then
+		minBtn.Text="+"
+		rebuildLayout(true)   -- passa true = minimized
+	else
+		minBtn.Text="—"
+		rebuildLayout(false)  -- passa false = normal
+	end
+end)
+
+-- drag
+local drag,dStart,dOrigin=false,nil,nil
+header.InputBegan:Connect(function(i)
+	if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+		drag=true; dStart=i.Position; dOrigin=wrap.Position
+	end
+end)
+UserInputService.InputChanged:Connect(function(i)
+	if drag and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+		local d=i.Position-dStart
+		wrap.Position=UDim2.new(dOrigin.X.Scale,dOrigin.X.Offset+d.X,dOrigin.Y.Scale,dOrigin.Y.Offset+d.Y)
+	end
+end)
+UserInputService.InputEnded:Connect(function(i)
+	if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+		if drag then drag=false; SaveConfig() end
+	end
+end)
+
+-- steal loop
+task.spawn(function()
+	while not State.guiClosed do
+		if State.autoStealEnabled and not State.isStealing then
+			local target=getTarget()
+			if target then
+				executeSteal(target)
+			else
+				-- FIX bug 2: status usa nome do brainrot selecionado
+				local selName=nil
+				if State.selectedUID then
+					for _,rd in ipairs(rowPool) do
+						if rd.entryUID==State.selectedUID then selName=rd.entryName; break end
+					end
+				end
+				if selName then
+					statusText.Text="Waiting: "..selName
+					statusText.TextColor3=Color3.fromRGB(255,200,80)
+					statusDot.BackgroundColor3=Color3.fromRGB(255,180,60)
+				elseif State.method==2 and #State.priorityList==0 then
+					statusText.Text="Priority list empty"
+					statusText.TextColor3=Color3.fromRGB(255,180,60)
+				else
+					statusText.Text="Scanning..."
+					statusText.TextColor3=Color3.fromRGB(235,225,255)
+					statusDot.BackgroundColor3=Color3.fromRGB(180,120,255)
+				end
+			end
+		end
+		task.wait(0.05)
+	end
+end)
+
+-- inicializa
+applyTabVisuals()
+rebuildLayout(false)
+refreshStealTargets()
+
+print("[Albux Auto Grab V2] Loaded")
