@@ -38,7 +38,7 @@ do
 end
 
 -- ── Config ────────────────────────────────────────────────────────────────
-local CONFIG_FILE = "LefaTP_v2.json"
+local CONFIG_FILE = "AlbuxTP_v2.json"
 local DefaultConfig = {
     AutoTP          = true,
     MinGenForTp     = 0,
@@ -55,12 +55,11 @@ local DefaultConfig = {
     RagdollSelfKey  = "R",
     AntiRagdollV2   = true,
     Minimized       = false,
-    -- posição do mini-botão
     MiniPosX        = nil,
     MiniPosY        = nil,
-    -- posição da janela de config
     CfgWinPosX      = nil,
     CfgWinPosY      = nil,
+    CloneWait       = 0.15,  -- delay interno do clone (equip + activate + tp)
 }
 local Config = DefaultConfig
 
@@ -466,7 +465,7 @@ local function walkForward(seconds)
     end)
 end
 
--- ── instantClone ──────────────────────────────────────────────────────────
+-- ── instantClone – usa Config.CloneWait para os delays ───────────────────
 local function instantClone()
     if _G.isCloning then return end
     _G.isCloning = true
@@ -477,22 +476,23 @@ local function instantClone()
         local cloner = LocalPlayer.Backpack:FindFirstChild("Quantum Cloner")
                     or char:FindFirstChild("Quantum Cloner")
         if not cloner then error("No Quantum Cloner") end
+        local cw = Config.CloneWait or 0.15
         pcall(function() hum:EquipTool(cloner) end)
-        task.wait(0.15)
+        task.wait(cw)           -- aguarda equipar
         cloner:Activate()
-        task.wait(0.15)
+        task.wait(cw)           -- aguarda clone spawnar
         local cloneName = tostring(LocalPlayer.UserId).."_Clone"
         for _=1,100 do
             if Workspace:FindFirstChild(cloneName) then break end
             task.wait(0.1)
         end
-        if not Workspace:FindFirstChild(cloneName) then error("") end
+        if not Workspace:FindFirstChild(cloneName) then error("Clone not found") end
         local toolsFrames = LocalPlayer.PlayerGui:FindFirstChild("ToolsFrames")
         local qcFrame     = toolsFrames and toolsFrames:FindFirstChild("QuantumCloner")
         local tpButton    = qcFrame and qcFrame:FindFirstChild("TeleportToClone")
         if not tpButton then error("Teleport button missing") end
         tpButton.Visible = true
-        task.wait(0.1)
+        task.wait(cw)           -- aguarda botão ficar visível/ativo
         if firesignal then
             firesignal(tpButton.MouseButton1Up)
         else
@@ -647,13 +647,16 @@ local function ragdollSelf()
     return false
 end
 
+local RAGDOLL_TO_TP_DELAY = 0.6
+
 -- ══════════════════════════════════════════════════════════════════════════
--- MAIN TP
+-- MAIN TP  (todos os delays são task.wait() fixos, sem sw())
 -- ══════════════════════════════════════════════════════════════════════════
 local function runAutoSnipe()
     if State.isTpMoving then return end
+
     task.spawn(function() ragdollSelf() end)
-    task.wait(0.15)
+    task.wait(RAGDOLL_TO_TP_DELAY)
 
     local targetPetData = nil
     local cache = SharedState.AllAnimalsCache
@@ -691,10 +694,9 @@ local function runAutoSnipe()
 
     State.isTpMoving = true
 
-    -- camera lock
-    local camera       = Workspace.CurrentCamera
+    local camera         = Workspace.CurrentCamera
     local prevCameraType = camera.CameraType
-    local prevFov      = camera.FieldOfView
+    local prevFov        = camera.FieldOfView
     local camConn
     camera.CameraType  = Enum.CameraType.Scriptable
     camera.FieldOfView = 95
@@ -768,7 +770,6 @@ local function runAutoSnipe()
     )
     if not resPre then stopCameraLock(); State.isTpMoving = false; return end
     local finalHeight = resPre.Position.Y + 5.5
-    -- ── FIX: se for andar térreo, garante que não ultrapassa Y=-8 ──────────
     if not isSecondFloor then
         finalHeight = math.min(finalHeight, -8)
     end
@@ -886,12 +887,10 @@ local function runAutoSnipe()
 
     if carpet then hum:EquipTool(carpet) end
 
-    -- plataforma temporária (2º andar)
     local verticalDiff = targetPart.Position.Y - hrp.Position.Y
     if verticalDiff > 2 then
         local platY  = targetPart.Position.Y - 13
         local standY = platY + 1.5
-
         local plat = Instance.new("Part")
         plat.Name        = "BullysTempPlatform"
         plat.Size        = Vector3.new(5, 1, 5)
@@ -902,9 +901,7 @@ local function runAutoSnipe()
         plat.CanCollide  = true
         plat.Transparency = 0.3
         plat.Parent      = Workspace
-
         RunService.Heartbeat:Wait()
-
         local standPos = Vector3.new(targetPart.Position.X, standY, targetPart.Position.Z)
         for _ = 1, 10 do
             if LocalPlayer:GetAttribute("Stealing") then break end
@@ -913,7 +910,6 @@ local function runAutoSnipe()
             hrp.CFrame = CFrame.new(standPos, standPos + faceDir)
             task.wait(0.05)
         end
-
         task.spawn(function()
             local start = tick()
             while tick()-start < 20 do
@@ -1089,19 +1085,15 @@ task.spawn(function()
 end)
 
 -- ══════════════════════════════════════════════════════════════════════════
---  GUI  ─  MINI BUTTON  +  CONFIG WINDOW (abre separado)
+--  GUI
 -- ══════════════════════════════════════════════════════════════════════════
-
--- ── helpers visuais ───────────────────────────────────────────────────────
 local function makeDrag(frame, handle)
     handle = handle or frame
     local dragging, dStart, dOrigin = false, nil, nil
     handle.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dStart   = i.Position
-            dOrigin  = frame.Position
+            dragging = true; dStart = i.Position; dOrigin = frame.Position
         end
     end)
     UserInputService.InputChanged:Connect(function(i)
@@ -1121,9 +1113,7 @@ local function makeDrag(frame, handle)
     end)
 end
 
--- ══════════════════════════════════════════════════════════════════════════
---  MINI BUTTON  (sempre visível, pequeníssimo)
--- ══════════════════════════════════════════════════════════════════════════
+-- ── MINI BUTTON ───────────────────────────────────────────────────────────
 local miniGui = Instance.new("ScreenGui")
 miniGui.Name          = "AlbuxMiniButton"
 miniGui.ResetOnSpawn  = false
@@ -1131,14 +1121,13 @@ miniGui.DisplayOrder  = 200
 miniGui.Parent        = PlayerGui
 
 local miniBtn = Instance.new("TextButton", miniGui)
-miniBtn.Size            = UDim2.fromOffset(110, 28)
+miniBtn.Size             = UDim2.fromOffset(110, 28)
 miniBtn.BackgroundColor3 = Color3.fromRGB(14, 7, 30)
 miniBtn.BorderSizePixel  = 0
 miniBtn.AutoButtonColor  = false
 miniBtn.ZIndex           = 10
 miniBtn.ClipsDescendants = false
 
--- posição salva ou padrão
 if Config.MiniPosX and Config.MiniPosY then
     miniBtn.Position = UDim2.fromOffset(Config.MiniPosX, Config.MiniPosY)
 else
@@ -1153,14 +1142,12 @@ miniStroke.Thickness        = 1.5
 miniStroke.Color            = Color3.fromRGB(180, 100, 255)
 miniStroke.Transparency     = 0.1
 
--- gradiente animado no botão
 AnimGradient(miniBtn, 0.01, ColorSequence.new{
-    ColorSequenceKeypoint.new(0,    Color3.fromRGB(40,  10, 100)),
-    ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(120, 50, 220)),
-    ColorSequenceKeypoint.new(1,    Color3.fromRGB(40,  10, 100)),
+    ColorSequenceKeypoint.new(0,   Color3.fromRGB(40,  10, 100)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(120, 50, 220)),
+    ColorSequenceKeypoint.new(1,   Color3.fromRGB(40,  10, 100)),
 })
 
--- linha superior colorida
 local miniTopLine = Instance.new("Frame", miniBtn)
 miniTopLine.Size             = UDim2.new(1, 0, 0, 2)
 miniTopLine.BackgroundColor3 = Color3.fromRGB(200, 120, 255)
@@ -1168,7 +1155,6 @@ miniTopLine.BorderSizePixel  = 0
 miniTopLine.ZIndex           = 11
 AnimGradient(miniTopLine, 0.015)
 
--- label principal "ALBUX TP"
 local miniLabel = Instance.new("TextLabel", miniBtn)
 miniLabel.Size               = UDim2.new(1, 0, 0, 16)
 miniLabel.Position           = UDim2.new(0, 0, 0, 3)
@@ -1194,7 +1180,6 @@ task.spawn(function()
     end
 end)
 
--- label "discord.gg/albuxhub"
 local discLabel = Instance.new("TextLabel", miniBtn)
 discLabel.Size               = UDim2.new(1, -4, 0, 11)
 discLabel.Position           = UDim2.new(0, 2, 0, 16)
@@ -1205,7 +1190,6 @@ discLabel.TextSize           = 8
 discLabel.TextColor3         = Color3.fromRGB(130, 70, 200)
 discLabel.ZIndex             = 12
 
--- hover
 miniBtn.MouseEnter:Connect(function()
     Tween(miniBtn, .15, {BackgroundColor3 = Color3.fromRGB(28, 12, 60)})
     Tween(miniStroke, .15, {Transparency = 0, Color = Color3.fromRGB(220, 140, 255)})
@@ -1218,21 +1202,18 @@ miniBtn.MouseButton1Down:Connect(function()
     Tween(miniBtn, .08, {BackgroundColor3 = Color3.fromRGB(50, 20, 110)})
 end)
 
--- drag do mini botão
 do
     local drag2, ds2, do2 = false, nil, nil
-    local moved = false
     miniBtn.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then
-            drag2 = true; ds2 = i.Position; do2 = miniBtn.Position; moved = false
+            drag2 = true; ds2 = i.Position; do2 = miniBtn.Position
         end
     end)
     UserInputService.InputChanged:Connect(function(i)
         if drag2 and (i.UserInputType == Enum.UserInputType.MouseMovement
             or i.UserInputType == Enum.UserInputType.Touch) then
             local d = i.Position - ds2
-            if d.Magnitude > 3 then moved = true end
             miniBtn.Position = UDim2.new(
                 do2.X.Scale, do2.X.Offset + d.X,
                 do2.Y.Scale, do2.Y.Offset + d.Y)
@@ -1242,9 +1223,6 @@ do
         if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then
             drag2 = false
-            if not moved then
-                -- clique: abre/fecha config window (tratado abaixo)
-            end
             Config.MiniPosX = miniBtn.AbsolutePosition.X
             Config.MiniPosY = miniBtn.AbsolutePosition.Y
             SaveConfig()
@@ -1252,9 +1230,7 @@ do
     end)
 end
 
--- ══════════════════════════════════════════════════════════════════════════
---  CONFIG WINDOW  (janela separada, abre ao clicar no mini botão)
--- ══════════════════════════════════════════════════════════════════════════
+-- ── CONFIG WINDOW ─────────────────────────────────────────────────────────
 local cfgGui = Instance.new("ScreenGui")
 cfgGui.Name         = "AlbuxConfigWindow"
 cfgGui.ResetOnSpawn = false
@@ -1265,7 +1241,7 @@ local cfgVisible = false
 
 local cfgWrap = Instance.new("Frame", cfgGui)
 cfgWrap.Name             = "CfgWrap"
-cfgWrap.Size             = UDim2.fromOffset(360, 0)   -- altura ajustada depois
+cfgWrap.Size             = UDim2.fromOffset(360, 0)
 cfgWrap.BackgroundTransparency = 1
 cfgWrap.Visible          = false
 
@@ -1284,7 +1260,6 @@ cfgMain.BorderSizePixel  = 0
 cfgMain.ClipsDescendants = false
 Instance.new("UICorner", cfgMain).CornerRadius = UDim.new(0, 18)
 
--- borda animada
 local cfgStroke = Instance.new("UIStroke", cfgMain)
 cfgStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 cfgStroke.Thickness        = 2
@@ -1308,19 +1283,18 @@ end)
 
 local cfgBg = Instance.new("UIGradient", cfgMain)
 cfgBg.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0,    Color3.fromRGB(28, 14, 56)),
-    ColorSequenceKeypoint.new(0.5,  Color3.fromRGB(14,  7, 32)),
-    ColorSequenceKeypoint.new(1,    Color3.fromRGB( 6,  3, 14)),
+    ColorSequenceKeypoint.new(0,   Color3.fromRGB(28, 14, 56)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(14,  7, 32)),
+    ColorSequenceKeypoint.new(1,   Color3.fromRGB( 6,  3, 14)),
 }
 cfgBg.Rotation = 145
 
--- drag da janela config
 makeDrag(cfgWrap, cfgMain)
 
--- ── layout interno ────────────────────────────────────────────────────────
-local PAD  = 14
-local CINNER = 340 - PAD * 2   -- largura usável
-local CY2  = 10                 -- cursor Y interno
+-- ── layout ────────────────────────────────────────────────────────────────
+local PAD    = 14
+local CINNER = 340 - PAD * 2
+local CY2    = 10
 
 local function nextY2(h, gap)
     gap = gap or 8
@@ -1342,7 +1316,7 @@ local function MakeSep2(yPos)
     return s
 end
 
--- título da janela config
+-- título
 local cfgTitle = Instance.new("TextLabel", cfgMain)
 cfgTitle.Size  = UDim2.new(1, 0, 0, 30)
 cfgTitle.Position = UDim2.new(0, 0, 0, CY2)
@@ -1355,15 +1329,14 @@ cfgTitle.ZIndex = 6
 nextY2(30, 8)
 MakeSep2(nextY2(0, 0) - 2); CY2 += 8
 
--- ── funções de componente (reutilizando estilo anterior) ──────────────────
 local _sliderDragging2 = false
 
+-- ── CfgToggle ─────────────────────────────────────────────────────────────
 local function CfgToggle(labelOn, labelOff, yPos, state, cbOn, cbOff, callback)
     cbOn  = cbOn  or Color3.fromRGB(60, 220, 130)
     cbOff = cbOff or Color3.fromRGB(230, 60, 60)
     local tOn  = Color3.fromRGB(140, 255, 180)
     local tOff = Color3.fromRGB(255, 100, 100)
-
     local frame = Instance.new("Frame", cfgMain)
     frame.Size  = UDim2.new(0, CINNER, 0, 40)
     frame.Position = UDim2.new(0, PAD, 0, yPos)
@@ -1373,13 +1346,11 @@ local function CfgToggle(labelOn, labelOff, yPos, state, cbOn, cbOff, callback)
     local fs = Instance.new("UIStroke", frame)
     fs.Color = state and cbOn or cbOff; fs.Thickness = 1.2; fs.Transparency = 0.4
     fs.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
     local pill = Instance.new("Frame", frame)
     pill.Size  = UDim2.fromOffset(3, 20); pill.Position = UDim2.new(0, 8, 0.5, -10)
     pill.BackgroundColor3 = state and cbOn or cbOff
     pill.BorderSizePixel  = 0; pill.ZIndex = 7
     Instance.new("UICorner", pill).CornerRadius = UDim.new(0, 3)
-
     local btn = Instance.new("TextButton", frame)
     btn.Size  = UDim2.new(1, 0, 1, 0)
     btn.BackgroundTransparency = 1
@@ -1387,7 +1358,6 @@ local function CfgToggle(labelOn, labelOff, yPos, state, cbOn, cbOff, callback)
     btn.TextColor3 = state and tOn or tOff
     btn.Font  = Enum.Font.GothamBold; btn.TextSize = 12
     btn.BorderSizePixel = 0; btn.ZIndex = 8; btn.AutoButtonColor = false
-
     btn.MouseButton1Click:Connect(function()
         state = not state
         btn.Text = state and labelOn or labelOff
@@ -1399,6 +1369,7 @@ local function CfgToggle(labelOn, labelOff, yPos, state, cbOn, cbOff, callback)
     return btn, frame
 end
 
+-- ── CfgSlider ─────────────────────────────────────────────────────────────
 local function CfgSlider(labelText, yPos, minV, maxV, curV, fmt, callback)
     local card = Instance.new("Frame", cfgMain)
     card.Size  = UDim2.new(0, CINNER, 0, 52)
@@ -1409,30 +1380,25 @@ local function CfgSlider(labelText, yPos, minV, maxV, curV, fmt, callback)
     local ss = Instance.new("UIStroke", card)
     ss.Color = Color3.fromRGB(100, 40, 200); ss.Thickness = 1.2; ss.Transparency = 0.4
     ss.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
     local topRow = Instance.new("Frame", card)
     topRow.Size  = UDim2.new(1, -16, 0, 16); topRow.Position = UDim2.new(0, 8, 0, 6)
     topRow.BackgroundTransparency = 1; topRow.ZIndex = 6
-
     local slLbl = Instance.new("TextLabel", topRow)
     slLbl.Size  = UDim2.new(0, 180, 1, 0); slLbl.BackgroundTransparency = 1
     slLbl.Text  = labelText; slLbl.Font = Enum.Font.GothamBold; slLbl.TextSize = 9
     slLbl.TextColor3 = Color3.fromRGB(140, 75, 210)
     slLbl.TextXAlignment = Enum.TextXAlignment.Left; slLbl.ZIndex = 7
-
     local slVal = Instance.new("TextLabel", topRow)
     slVal.Size  = UDim2.new(1, -180, 1, 0); slVal.Position = UDim2.new(0, 180, 0, 0)
     slVal.BackgroundTransparency = 1; slVal.Text = string.format(fmt, curV)
     slVal.Font  = Enum.Font.GothamBlack; slVal.TextSize = 12
     slVal.TextColor3 = Color3.fromRGB(220, 180, 255)
     slVal.TextXAlignment = Enum.TextXAlignment.Right; slVal.ZIndex = 7
-
     local trackBG = Instance.new("Frame", card)
     trackBG.Size  = UDim2.new(1, -16, 0, 7); trackBG.Position = UDim2.new(0, 8, 0, 32)
     trackBG.BackgroundColor3 = Color3.fromRGB(22, 10, 48)
     trackBG.BorderSizePixel  = 0; trackBG.ZIndex = 6
     Instance.new("UICorner", trackBG).CornerRadius = UDim.new(1, 0)
-
     local fillPct   = math.clamp((curV-minV)/(maxV-minV), 0, 1)
     local trackFill = Instance.new("Frame", trackBG)
     trackFill.Size  = UDim2.new(fillPct, 0, 1, 0)
@@ -1444,18 +1410,15 @@ local function CfgSlider(labelText, yPos, minV, maxV, curV, fmt, callback)
         ColorSequenceKeypoint.new(0.5, Color3.fromRGB(220, 140, 255)),
         ColorSequenceKeypoint.new(1,   Color3.fromRGB(100, 30, 220)),
     })
-
     local thumb = Instance.new("Frame", trackBG)
     thumb.Size  = UDim2.fromOffset(14, 14); thumb.AnchorPoint = Vector2.new(0.5, 0.5)
     thumb.Position = UDim2.new(fillPct, 0, 0.5, 0)
     thumb.BackgroundColor3 = Color3.fromRGB(220, 170, 255)
     thumb.BorderSizePixel  = 0; thumb.ZIndex = 9
     Instance.new("UICorner", thumb).CornerRadius = UDim.new(1, 0)
-
     local sliderBtn = Instance.new("TextButton", trackBG)
     sliderBtn.Size  = UDim2.new(1, 0, 3, 0); sliderBtn.Position = UDim2.new(0, 0, -1, 0)
     sliderBtn.BackgroundTransparency = 1; sliderBtn.Text = ""; sliderBtn.ZIndex = 10
-
     local dragging = false
     local function updateSlider(absX)
         local pct = math.clamp(
@@ -1466,9 +1429,7 @@ local function CfgSlider(labelText, yPos, minV, maxV, curV, fmt, callback)
         slVal.Text = string.format(fmt, v)
         callback(v)
     end
-    sliderBtn.MouseButton1Down:Connect(function()
-        dragging = true; _sliderDragging2 = true
-    end)
+    sliderBtn.MouseButton1Down:Connect(function() dragging = true; _sliderDragging2 = true end)
     UserInputService.InputChanged:Connect(function(i)
         if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
             or i.UserInputType == Enum.UserInputType.Touch) then
@@ -1484,6 +1445,7 @@ local function CfgSlider(labelText, yPos, minV, maxV, curV, fmt, callback)
     return card
 end
 
+-- ── CfgValueRow ───────────────────────────────────────────────────────────
 local function CfgValueRow(labelText, yPos, value, callback)
     local card = Instance.new("Frame", cfgMain)
     card.Size  = UDim2.new(0, CINNER, 0, 40)
@@ -1494,14 +1456,12 @@ local function CfgValueRow(labelText, yPos, value, callback)
     local cs = Instance.new("UIStroke", card)
     cs.Color = Color3.fromRGB(100, 40, 200); cs.Thickness = 1.2; cs.Transparency = 0.5
     cs.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
     local lbl = Instance.new("TextLabel", card)
     lbl.Size  = UDim2.new(0.55, 0, 1, 0); lbl.Position = UDim2.new(0, 18, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = labelText
     lbl.Font  = Enum.Font.GothamBold; lbl.TextSize = 12
     lbl.TextColor3 = Color3.fromRGB(220, 180, 255)
     lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.ZIndex = 7
-
     local box = Instance.new("TextBox", card)
     box.Size  = UDim2.new(0, 68, 0, 26); box.Position = UDim2.new(1, -78, 0.5, -13)
     box.BackgroundColor3 = Color3.fromRGB(22, 10, 48)
@@ -1515,6 +1475,7 @@ local function CfgValueRow(labelText, yPos, value, callback)
     return card
 end
 
+-- ── CfgKeybindRow ─────────────────────────────────────────────────────────
 local function CfgKeybindRow(labelText, yPos, key, callback)
     local card = Instance.new("Frame", cfgMain)
     card.Size  = UDim2.new(0, CINNER, 0, 40)
@@ -1525,14 +1486,12 @@ local function CfgKeybindRow(labelText, yPos, key, callback)
     local cs = Instance.new("UIStroke", card)
     cs.Color = Color3.fromRGB(100, 40, 200); cs.Thickness = 1.2; cs.Transparency = 0.5
     cs.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
     local lbl = Instance.new("TextLabel", card)
     lbl.Size  = UDim2.new(0.6, 0, 1, 0); lbl.Position = UDim2.new(0, 18, 0, 0)
     lbl.BackgroundTransparency = 1; lbl.Text = labelText
     lbl.Font  = Enum.Font.GothamBold; lbl.TextSize = 12
     lbl.TextColor3 = Color3.fromRGB(220, 180, 255)
     lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.ZIndex = 7
-
     local badge = Instance.new("TextButton", card)
     badge.Size  = UDim2.new(0, 48, 0, 28); badge.Position = UDim2.new(1, -58, 0.5, -14)
     badge.BackgroundColor3 = Color3.fromRGB(70, 25, 160)
@@ -1549,7 +1508,6 @@ local function CfgKeybindRow(labelText, yPos, key, callback)
     local bs = Instance.new("UIStroke", badge)
     bs.Color = Color3.fromRGB(200, 140, 255); bs.Thickness = 1.5; bs.Transparency = 0.1
     bs.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
     local listening = false
     badge.MouseButton1Click:Connect(function()
         if listening then return end
@@ -1566,14 +1524,13 @@ local function CfgKeybindRow(labelText, yPos, key, callback)
             end
         end)
         task.delay(5, function()
-            if listening then
-                listening = false; badge.Text = key or "T"; conn:Disconnect()
-            end
+            if listening then listening = false; badge.Text = key or "T"; conn:Disconnect() end
         end)
     end)
     return card
 end
 
+-- ── CfgBtn ────────────────────────────────────────────────────────────────
 local function CfgBtn(labelText, yPos, accent, textCol, cb)
     accent  = accent  or Color3.fromRGB(140, 60, 255)
     textCol = textCol or Color3.fromRGB(220, 180, 255)
@@ -1586,7 +1543,6 @@ local function CfgBtn(labelText, yPos, accent, textCol, cb)
     local fs = Instance.new("UIStroke", frame)
     fs.Color = accent; fs.Thickness = 1.2; fs.Transparency = 0.5
     fs.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-
     local btn = Instance.new("TextButton", frame)
     btn.Size  = UDim2.new(1, 0, 1, 0); btn.BackgroundTransparency = 1
     btn.Text  = labelText; btn.TextColor3 = textCol
@@ -1610,15 +1566,15 @@ local function CfgBtn(labelText, yPos, accent, textCol, cb)
     return btn, frame
 end
 
--- ── construção dos controles na janela config ─────────────────────────────
+-- ══════════════════════════════════════════════════════════════════════════
+-- controles do config
+-- ══════════════════════════════════════════════════════════════════════════
 
--- AUTO TP toggle
 CfgToggle("AUTO TP ● ON", "AUTO TP ● OFF",
     nextY2(40, 8), Config.AutoTP,
     Color3.fromRGB(60,220,130), Color3.fromRGB(230,60,60),
     function(v) Config.AutoTP = v; SaveConfig() end)
 
--- ANTI RAGDOLL V2 toggle
 CfgToggle("ANTI RAGDOLL V2 ● ON", "ANTI RAGDOLL V2 ● OFF",
     nextY2(40, 8), Config.AntiRagdollV2,
     Color3.fromRGB(60,220,130), Color3.fromRGB(230,60,60),
@@ -1627,7 +1583,6 @@ CfgToggle("ANTI RAGDOLL V2 ● ON", "ANTI RAGDOLL V2 ● OFF",
         if v then startAntiRagdollV2(true) else stopAntiRagdollV2() end
     end)
 
--- TP AFTER FPS toggle
 CfgToggle("TP AFTER FPS ● ON", "TP AFTER FPS ● OFF",
     nextY2(40, 8), Config.TpAfterFPS,
     Color3.fromRGB(80,170,255), Color3.fromRGB(230,60,60),
@@ -1635,7 +1590,6 @@ CfgToggle("TP AFTER FPS ● ON", "TP AFTER FPS ● OFF",
 
 MakeSep2(nextY2(0,0) - 2); CY2 += 8
 
--- MIN GEN
 CfgValueRow("MIN TP GEN", nextY2(40, 8),
     Config.MinGenForTp or "",
     function(txt)
@@ -1643,24 +1597,41 @@ CfgValueRow("MIN TP GEN", nextY2(40, 8),
         Config.MinGenForTp = (raw=="" and 0 or raw); SaveConfig()
     end)
 
--- TP DELAY slider
 CfgSlider("TP DELAY (0.00s – 1.00s)", nextY2(52, 8),
     0, 1, Config.TpDelay or 0, "%.2fs",
     function(v) Config.TpDelay = math.floor(v*100)/100; SaveConfig() end)
 
--- FPS THRESHOLD slider
 CfgSlider("FPS THRESHOLD (50–1000)", nextY2(52, 8),
     50, 1000, Config.FPSThreshold or 200, "%.0f fps",
     function(v) Config.FPSThreshold = math.floor(v); SaveConfig() end)
 
--- FPS WAIT slider
 CfgSlider("FPS WAIT (0.00s – 1.00s)", nextY2(52, 8),
     0, 1, Config.FPSWait or 0, "%.2fs",
     function(v) Config.FPSWait = math.floor(v*100)/100; SaveConfig() end)
 
+-- ── CLONE WAIT slider (0.05s – 1.00s) ────────────────────────────────────
+CfgSlider("CLONE WAIT (0.05s – 1.00s)", nextY2(52, 8),
+    0.05, 1.00, Config.CloneWait or 0.15, "%.2fs",
+    function(v)
+        Config.CloneWait = math.floor(v*100)/100
+        SaveConfig()
+    end)
+
+do
+    local descLbl = Instance.new("TextLabel", cfgMain)
+    descLbl.Size  = UDim2.new(0, CINNER, 0, 14)
+    descLbl.Position = UDim2.new(0, PAD, 0, CY2 - 6)
+    descLbl.BackgroundTransparency = 1
+    descLbl.Text  = "Delay entre: equipar cloner → ativar → teleportar ao clone"
+    descLbl.Font  = Enum.Font.Gotham
+    descLbl.TextSize = 8
+    descLbl.TextColor3 = Color3.fromRGB(110, 60, 180)
+    descLbl.ZIndex = 6
+    CY2 += 16
+end
+
 MakeSep2(nextY2(0,0) - 2); CY2 += 8
 
--- keybinds
 CfgKeybindRow("TP KEYBIND",    nextY2(40, 8), Config.TpKey,
     function(k) Config.TpKey = k; SaveConfig() end)
 CfgKeybindRow("CLONE KEYBIND", nextY2(40, 8), Config.CloneKey,
@@ -1670,13 +1641,12 @@ CfgKeybindRow("RAGDOLL SELF",  nextY2(40, 8), Config.RagdollSelfKey,
 
 MakeSep2(nextY2(0,0) - 2); CY2 += 8
 
--- priority list button
 local _, prioF = CfgBtn("☰ EDIT PRIORITY LIST", nextY2(40, 8),
     Color3.fromRGB(220,130,255), Color3.fromRGB(240,190,255))
 
 MakeSep2(nextY2(0,0) - 2); CY2 += 8
 
--- chips de status no fundo da janela config
+-- ── chips de status ───────────────────────────────────────────────────────
 local CHIP_W2 = math.floor((CINNER - 16) / 3)
 local chipsY2 = nextY2(38, 8)
 
@@ -1707,9 +1677,9 @@ local function MakeChip2(label, value, xOff, accentC)
     return val
 end
 
-local fpsChipVal2    = MakeChip2("FPS",    "0",     0,                       Color3.fromRGB(140,60,255))
-local statusChipVal2 = MakeChip2("STATUS", "READY", CHIP_W2+8,               Color3.fromRGB(60,200,120))
-local petsChipVal2   = MakeChip2("PETS",   "0",     (CHIP_W2+8)*2,           Color3.fromRGB(220,80,255))
+local fpsChipVal2    = MakeChip2("FPS",    "0",     0,             Color3.fromRGB(140,60,255))
+local statusChipVal2 = MakeChip2("STATUS", "READY", CHIP_W2+8,     Color3.fromRGB(60,200,120))
+local petsChipVal2   = MakeChip2("PETS",   "0",     (CHIP_W2+8)*2, Color3.fromRGB(220,80,255))
 
 task.spawn(function()
     while true do
@@ -1717,10 +1687,10 @@ task.spawn(function()
         if petsChipVal2   then petsChipVal2.Text   = tostring(#(SharedState.AllAnimalsCache or {})) end
         if statusChipVal2 then
             if State.isTpMoving then
-                statusChipVal2.Text      = "TP..."
+                statusChipVal2.Text       = "TP..."
                 statusChipVal2.TextColor3 = Color3.fromRGB(255, 200, 100)
             else
-                statusChipVal2.Text      = "READY"
+                statusChipVal2.Text       = "READY"
                 statusChipVal2.TextColor3 = Color3.fromRGB(140, 255, 180)
             end
         end
@@ -1728,7 +1698,6 @@ task.spawn(function()
     end
 end)
 
--- crédito
 local credY2 = nextY2(0, 4)
 local cred2  = Instance.new("TextLabel", cfgMain)
 cred2.Size   = UDim2.new(1, 0, 0, 14); cred2.Position = UDim2.new(0, 0, 0, credY2)
@@ -1741,7 +1710,7 @@ local finalH2 = credY2 + 20
 cfgMain.Size  = UDim2.new(1, -20, 0, finalH2)
 cfgWrap.Size  = UDim2.fromOffset(360, finalH2 + 20)
 
--- ── drag save da janela config ────────────────────────────────────────────
+-- drag save
 local cfgDragging, cfgDStart, cfgDOrigin = false, nil, nil
 cfgMain.InputBegan:Connect(function(i)
     if _sliderDragging2 then return end
@@ -1771,13 +1740,12 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 
--- ── abrir/fechar a janela de config ao clicar no mini botão ───────────────
 miniBtn.MouseButton1Up:Connect(function()
     cfgVisible = not cfgVisible
     cfgWrap.Visible = cfgVisible
 end)
 
--- ── Priority GUI (reutiliza lógica anterior) ──────────────────────────────
+-- ── Priority GUI ──────────────────────────────────────────────────────────
 local _priorityGui = nil
 
 local function getBrainrotViewportClone(petName)
@@ -1837,7 +1805,6 @@ local function createPriorityGUI()
     if _priorityGui and _priorityGui.Parent then
         _priorityGui:Destroy(); _priorityGui = nil; return
     end
-
     local popW, popH = 420, 580
     _priorityGui = Instance.new("ScreenGui")
     _priorityGui.Name = "LefaPriorityGUI"; _priorityGui.ResetOnSpawn = false
@@ -2050,7 +2017,6 @@ local function createPriorityGUI()
     refreshPriorityList(); refreshAllList()
 end
 
--- liga o botão de priority da janela de config
 local prioFrameBtn = prioF:FindFirstChildWhichIsA("TextButton")
 if prioFrameBtn then
     prioFrameBtn.MouseButton1Up:Connect(function() createPriorityGUI() end)
@@ -2062,8 +2028,8 @@ end
 UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
     if UserInputService:GetFocusedTextBox() then return end
-    if input.KeyCode == (Enum.KeyCode[Config.TpKey]         or Enum.KeyCode.T) then runAutoSnipe() end
-    if input.KeyCode == (Enum.KeyCode[Config.CloneKey]      or Enum.KeyCode.V) then instantClone() end
+    if input.KeyCode == (Enum.KeyCode[Config.TpKey]          or Enum.KeyCode.T) then runAutoSnipe() end
+    if input.KeyCode == (Enum.KeyCode[Config.CloneKey]       or Enum.KeyCode.V) then instantClone() end
     if input.KeyCode == (Enum.KeyCode[Config.RagdollSelfKey] or Enum.KeyCode.R) then
         task.spawn(function()
             local ok = ragdollSelf()
