@@ -38,7 +38,7 @@ do
 end
 
 -- ── Config ────────────────────────────────────────────────────────────────
-local CONFIG_FILE = "AlbuxTP_v2.json"
+local CONFIG_FILE = "LefaTP_v2.json"
 local DefaultConfig = {
     AutoTP          = true,
     MinGenForTp     = 0,
@@ -59,7 +59,8 @@ local DefaultConfig = {
     MiniPosY        = nil,
     CfgWinPosX      = nil,
     CfgWinPosY      = nil,
-    CloneWait       = 0.15,  -- delay interno do clone (equip + activate + tp)
+    TpSpeed         = 500,
+    CloneWait       = 0.15,
 }
 local Config = DefaultConfig
 
@@ -81,6 +82,14 @@ local function SaveConfig()
     if writefile then
         pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(Config)) end)
     end
+end
+
+-- ── sw() – speed-aware wait for TP movement ──────────────────────────────
+local function sw(t)
+    local pct  = math.clamp((Config.TpSpeed or 500) - 100, 0, 900) / 900
+    local mult = 0.2 + pct * (2.0 - 0.2)
+    local final = t / mult
+    if final > 0 then task.wait(final) end
 end
 
 -- ── State & Connections ───────────────────────────────────────────────────
@@ -465,7 +474,7 @@ local function walkForward(seconds)
     end)
 end
 
--- ── instantClone – usa Config.CloneWait para os delays ───────────────────
+-- ── instantClone – uses Config.CloneWait ─────────────────────────────────
 local function instantClone()
     if _G.isCloning then return end
     _G.isCloning = true
@@ -478,9 +487,9 @@ local function instantClone()
         if not cloner then error("No Quantum Cloner") end
         local cw = Config.CloneWait or 0.15
         pcall(function() hum:EquipTool(cloner) end)
-        task.wait(cw)           -- aguarda equipar
+        task.wait(cw)
         cloner:Activate()
-        task.wait(cw)           -- aguarda clone spawnar
+        task.wait(cw)
         local cloneName = tostring(LocalPlayer.UserId).."_Clone"
         for _=1,100 do
             if Workspace:FindFirstChild(cloneName) then break end
@@ -492,7 +501,7 @@ local function instantClone()
         local tpButton    = qcFrame and qcFrame:FindFirstChild("TeleportToClone")
         if not tpButton then error("Teleport button missing") end
         tpButton.Visible = true
-        task.wait(cw)           -- aguarda botão ficar visível/ativo
+        task.wait(cw)
         if firesignal then
             firesignal(tpButton.MouseButton1Up)
         else
@@ -650,7 +659,7 @@ end
 local RAGDOLL_TO_TP_DELAY = 0.6
 
 -- ══════════════════════════════════════════════════════════════════════════
--- MAIN TP  (todos os delays são task.wait() fixos, sem sw())
+-- MAIN TP  (uses sw() for TP movement delays, controlled by TpSpeed)
 -- ══════════════════════════════════════════════════════════════════════════
 local function runAutoSnipe()
     if State.isTpMoving then return end
@@ -790,12 +799,12 @@ local function runAutoSnipe()
         end
         hrp.CFrame = CFrame.new(hrp.Position) * facingRot
         if hum and hum.Parent then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
-        task.wait(0.01)
+        sw(0.01)
         if not char.Parent or not hrp.Parent then
             stopCameraLock(); State.isTpMoving = false; return
         end
         hrp.CFrame = CFrame.new(hrp.Position.X, 50, hrp.Position.Z) * facingRot
-        task.wait(0.06)
+        sw(0.06)
         if not char.Parent or not hrp.Parent then
             stopCameraLock(); State.isTpMoving = false; return
         end
@@ -810,7 +819,7 @@ local function runAutoSnipe()
         local carpetPosAtHeight = Vector3.new(
             carpetPart.Position.X, hrp.Position.Y, positionBehindPet.Z)
         hrp.CFrame = CFrame.new(carpetPosAtHeight) * facingRot
-        task.wait(0.18)
+        sw(0.18)
 
         if not char.Parent or not hrp.Parent then
             State.isTpMoving = false; return
@@ -828,15 +837,15 @@ local function runAutoSnipe()
                 hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
             if (hrp.Position - targetBasePos).Magnitude > 3 then
                 hrp.CFrame = CFrame.new(targetBasePos, targetBasePos + faceDir)
-                task.wait(0.05)
+                sw(0.05)
             end
         end
-        task.wait(0.05)
+        sw(0.05)
         do
             local newPos = hrp.Position + faceDir * 1
             hrp.CFrame = CFrame.new(newPos, newPos + faceDir)
         end
-        task.wait(0.06)
+        sw(0.06)
         hum.AutoRotate = false
         instantClone()
         while _G.isCloning do task.wait() end
@@ -852,7 +861,7 @@ local function runAutoSnipe()
             end
             for _ = 1, 4 do
                 if (hrp.Position - bestSpot).Magnitude > 3 then
-                    hrp.CFrame = CFrame.new(bestSpot); task.wait(0.03)
+                    hrp.CFrame = CFrame.new(bestSpot); sw(0.03)
                 end
             end
             local bestFace    = FACE_TARGETS[1]
@@ -863,27 +872,27 @@ local function runAutoSnipe()
             end
             hrp.CFrame = CFrame.lookAt(hrp.Position,
                 Vector3.new(bestFace.X, hrp.Position.Y, bestFace.Z))
-            task.wait(0.01); walkForward(0.10); task.wait(0.10)
+            sw(0.01); walkForward(0.10); sw(0.10)
         else
             for _ = 1, 10 do
                 hrp.AssemblyLinearVelocity = Vector3.new(
                     hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
                 if (hrp.Position - targetBasePos).Magnitude > 3 then
                     hrp.CFrame = CFrame.new(targetBasePos, targetBasePos + faceDir)
-                    task.wait(0.05)
+                    sw(0.05)
                 end
             end
-            task.wait(0.05)
+            sw(0.05)
             do
                 local newPos = hrp.Position + faceDir * 1
                 hrp.CFrame = CFrame.new(newPos, newPos + faceDir)
             end
-            task.wait(0.02)
+            sw(0.02)
             instantClone()
             while _G.isCloning do task.wait() end
         end
     end
-    task.wait(0.04)
+    sw(0.04)
 
     if carpet then hum:EquipTool(carpet) end
 
@@ -908,7 +917,7 @@ local function runAutoSnipe()
             hrp.AssemblyLinearVelocity = Vector3.new(
                 hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
             hrp.CFrame = CFrame.new(standPos, standPos + faceDir)
-            task.wait(0.05)
+            sw(0.05)
         end
         task.spawn(function()
             local start = tick()
@@ -925,9 +934,9 @@ local function runAutoSnipe()
                 hrp.AssemblyLinearVelocity.X, 0, hrp.AssemblyLinearVelocity.Z)
             if (hrp.Position - targetPart.Position).Magnitude > 3 then
                 hrp.CFrame = CFrame.new(targetPart.Position, targetPart.Position + faceDir)
-                task.wait(0.05)
+                sw(0.05)
             end
-            task.wait(0.05)
+            sw(0.05)
         end
     end
 
@@ -1316,7 +1325,6 @@ local function MakeSep2(yPos)
     return s
 end
 
--- título
 local cfgTitle = Instance.new("TextLabel", cfgMain)
 cfgTitle.Size  = UDim2.new(1, 0, 0, 30)
 cfgTitle.Position = UDim2.new(0, 0, 0, CY2)
@@ -1384,12 +1392,12 @@ local function CfgSlider(labelText, yPos, minV, maxV, curV, fmt, callback)
     topRow.Size  = UDim2.new(1, -16, 0, 16); topRow.Position = UDim2.new(0, 8, 0, 6)
     topRow.BackgroundTransparency = 1; topRow.ZIndex = 6
     local slLbl = Instance.new("TextLabel", topRow)
-    slLbl.Size  = UDim2.new(0, 180, 1, 0); slLbl.BackgroundTransparency = 1
-    slLbl.Text  = labelText; slLbl.Font = Enum.Font.GothamBold; slLbl.TextSize = 9
-    slLbl.TextColor3 = Color3.fromRGB(140, 75, 210)
+    slLbl.Size  = UDim2.new(0, 200, 1, 0); slLbl.BackgroundTransparency = 1
+    slLbl.Text  = labelText; slLbl.Font = Enum.Font.GothamBold; slLbl.TextSize = 10
+    slLbl.TextColor3 = Color3.fromRGB(180, 130, 240)
     slLbl.TextXAlignment = Enum.TextXAlignment.Left; slLbl.ZIndex = 7
     local slVal = Instance.new("TextLabel", topRow)
-    slVal.Size  = UDim2.new(1, -180, 1, 0); slVal.Position = UDim2.new(0, 180, 0, 0)
+    slVal.Size  = UDim2.new(1, -200, 1, 0); slVal.Position = UDim2.new(0, 200, 0, 0)
     slVal.BackgroundTransparency = 1; slVal.Text = string.format(fmt, curV)
     slVal.Font  = Enum.Font.GothamBlack; slVal.TextSize = 12
     slVal.TextColor3 = Color3.fromRGB(220, 180, 255)
@@ -1428,6 +1436,106 @@ local function CfgSlider(labelText, yPos, minV, maxV, curV, fmt, callback)
         Tween(thumb,     .12, {Position = UDim2.new(pct, 0, 0.5, 0)})
         slVal.Text = string.format(fmt, v)
         callback(v)
+    end
+    sliderBtn.MouseButton1Down:Connect(function() dragging = true; _sliderDragging2 = true end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+            or i.UserInputType == Enum.UserInputType.Touch) then
+            updateSlider(i.Position.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false; _sliderDragging2 = false
+        end
+    end)
+    return card
+end
+
+-- ── CfgSliderStepped ──────────────────────────────────────────────────────
+local function CfgSliderStepped(labelText, yPos, steps, curV, fmt, callback)
+    local card = Instance.new("Frame", cfgMain)
+    card.Size  = UDim2.new(0, CINNER, 0, 52)
+    card.Position = UDim2.new(0, PAD, 0, yPos)
+    card.BackgroundColor3 = Color3.fromRGB(16, 9, 32)
+    card.BorderSizePixel  = 0; card.ZIndex = 5
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
+    local ss = Instance.new("UIStroke", card)
+    ss.Color = Color3.fromRGB(100, 40, 200); ss.Thickness = 1.2; ss.Transparency = 0.4
+    ss.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    local topRow = Instance.new("Frame", card)
+    topRow.Size  = UDim2.new(1, -16, 0, 16); topRow.Position = UDim2.new(0, 8, 0, 6)
+    topRow.BackgroundTransparency = 1; topRow.ZIndex = 6
+    local slLbl = Instance.new("TextLabel", topRow)
+    slLbl.Size  = UDim2.new(0, 200, 1, 0); slLbl.BackgroundTransparency = 1
+    slLbl.Text  = labelText; slLbl.Font = Enum.Font.GothamBold; slLbl.TextSize = 10
+    slLbl.TextColor3 = Color3.fromRGB(180, 130, 240)
+    slLbl.TextXAlignment = Enum.TextXAlignment.Left; slLbl.ZIndex = 7
+    local function findClosestStep(v)
+        local bestIdx, bestDist = 1, math.huge
+        for i, sv in ipairs(steps) do
+            local d = math.abs(sv - v)
+            if d < bestDist then bestDist = d; bestIdx = i end
+        end
+        return bestIdx
+    end
+    local curIdx = findClosestStep(curV)
+    local slVal = Instance.new("TextLabel", topRow)
+    slVal.Size  = UDim2.new(1, -200, 1, 0); slVal.Position = UDim2.new(0, 200, 0, 0)
+    slVal.BackgroundTransparency = 1
+    slVal.Text  = string.format(fmt, steps[curIdx])
+    slVal.Font  = Enum.Font.GothamBlack; slVal.TextSize = 12
+    slVal.TextColor3 = Color3.fromRGB(220, 180, 255)
+    slVal.TextXAlignment = Enum.TextXAlignment.Right; slVal.ZIndex = 7
+    local trackBG = Instance.new("Frame", card)
+    trackBG.Size  = UDim2.new(1, -16, 0, 7); trackBG.Position = UDim2.new(0, 8, 0, 32)
+    trackBG.BackgroundColor3 = Color3.fromRGB(22, 10, 48)
+    trackBG.BorderSizePixel  = 0; trackBG.ZIndex = 6
+    Instance.new("UICorner", trackBG).CornerRadius = UDim.new(1, 0)
+    local function idxToPct(idx) return (idx - 1) / (#steps - 1) end
+    local initPct   = idxToPct(curIdx)
+    local trackFill = Instance.new("Frame", trackBG)
+    trackFill.Size  = UDim2.new(initPct, 0, 1, 0)
+    trackFill.BackgroundColor3 = Color3.fromRGB(160, 80, 255)
+    trackFill.BorderSizePixel  = 0; trackFill.ZIndex = 7
+    Instance.new("UICorner", trackFill).CornerRadius = UDim.new(1, 0)
+    AnimGradient(trackFill, 0.012, ColorSequence.new{
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(100, 30, 220)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(220, 140, 255)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(100, 30, 220)),
+    })
+    local thumb = Instance.new("Frame", trackBG)
+    thumb.Size  = UDim2.fromOffset(14, 14); thumb.AnchorPoint = Vector2.new(0.5, 0.5)
+    thumb.Position = UDim2.new(initPct, 0, 0.5, 0)
+    thumb.BackgroundColor3 = Color3.fromRGB(220, 170, 255)
+    thumb.BorderSizePixel  = 0; thumb.ZIndex = 9
+    Instance.new("UICorner", thumb).CornerRadius = UDim.new(1, 0)
+    for i, _ in ipairs(steps) do
+        local pct = idxToPct(i)
+        local mark = Instance.new("Frame", trackBG)
+        mark.Size  = UDim2.fromOffset(2, 5)
+        mark.AnchorPoint = Vector2.new(0.5, 0.5)
+        mark.Position    = UDim2.new(pct, 0, 0.5, 0)
+        mark.BackgroundColor3 = Color3.fromRGB(180, 100, 255)
+        mark.BorderSizePixel  = 0; mark.ZIndex = 8
+        Instance.new("UICorner", mark).CornerRadius = UDim.new(1, 0)
+    end
+    local sliderBtn = Instance.new("TextButton", trackBG)
+    sliderBtn.Size  = UDim2.new(1, 0, 3, 0); sliderBtn.Position = UDim2.new(0, 0, -1, 0)
+    sliderBtn.BackgroundTransparency = 1; sliderBtn.Text = ""; sliderBtn.ZIndex = 10
+    local dragging = false
+    local function updateSlider(absX)
+        local rawPct = math.clamp(
+            (absX - trackBG.AbsolutePosition.X) / trackBG.AbsoluteSize.X, 0, 1)
+        local rawIdx = 1 + rawPct * (#steps - 1)
+        local snappedIdx = math.clamp(math.round(rawIdx), 1, #steps)
+        local snappedPct = idxToPct(snappedIdx)
+        curIdx = snappedIdx
+        Tween(trackFill, .08, {Size = UDim2.new(snappedPct, 0, 1, 0)})
+        Tween(thumb,     .08, {Position = UDim2.new(snappedPct, 0, 0.5, 0)})
+        slVal.Text = string.format(fmt, steps[snappedIdx])
+        callback(steps[snappedIdx])
     end
     sliderBtn.MouseButton1Down:Connect(function() dragging = true; _sliderDragging2 = true end)
     UserInputService.InputChanged:Connect(function(i)
@@ -1566,8 +1674,23 @@ local function CfgBtn(labelText, yPos, accent, textCol, cb)
     return btn, frame
 end
 
+-- ── helper for description labels ─────────────────────────────────────────
+local function CfgDescLabel(text)
+    local descLbl = Instance.new("TextLabel", cfgMain)
+    descLbl.Size  = UDim2.new(0, CINNER, 0, 18)
+    descLbl.Position = UDim2.new(0, PAD, 0, CY2 - 4)
+    descLbl.BackgroundTransparency = 1
+    descLbl.Text  = text
+    descLbl.Font  = Enum.Font.GothamBold
+    descLbl.TextSize = 10
+    descLbl.TextColor3 = Color3.fromRGB(180, 140, 240)
+    descLbl.ZIndex = 6
+    CY2 += 18
+    return descLbl
+end
+
 -- ══════════════════════════════════════════════════════════════════════════
--- controles do config
+-- CONFIG CONTROLS
 -- ══════════════════════════════════════════════════════════════════════════
 
 CfgToggle("AUTO TP ● ON", "AUTO TP ● OFF",
@@ -1597,38 +1720,39 @@ CfgValueRow("MIN TP GEN", nextY2(40, 8),
         Config.MinGenForTp = (raw=="" and 0 or raw); SaveConfig()
     end)
 
-CfgSlider("TP DELAY (0.00s – 1.00s)", nextY2(52, 8),
+CfgSlider("TP DELAY (0.00s - 1.00s)", nextY2(52, 8),
     0, 1, Config.TpDelay or 0, "%.2fs",
     function(v) Config.TpDelay = math.floor(v*100)/100; SaveConfig() end)
 
-CfgSlider("FPS THRESHOLD (50–1000)", nextY2(52, 8),
+CfgSlider("FPS THRESHOLD (50 - 1000)", nextY2(52, 8),
     50, 1000, Config.FPSThreshold or 200, "%.0f fps",
     function(v) Config.FPSThreshold = math.floor(v); SaveConfig() end)
 
-CfgSlider("FPS WAIT (0.00s – 1.00s)", nextY2(52, 8),
+CfgSlider("FPS WAIT (0.00s - 1.00s)", nextY2(52, 8),
     0, 1, Config.FPSWait or 0, "%.2fs",
     function(v) Config.FPSWait = math.floor(v*100)/100; SaveConfig() end)
 
--- ── CLONE WAIT slider (0.05s – 1.00s) ────────────────────────────────────
-CfgSlider("CLONE WAIT (0.05s – 1.00s)", nextY2(52, 8),
-    0.05, 1.00, Config.CloneWait or 0.15, "%.2fs",
-    function(v)
-        Config.CloneWait = math.floor(v*100)/100
-        SaveConfig()
-    end)
+MakeSep2(nextY2(0,0) - 2); CY2 += 8
 
+-- ── TP SPEED ──────────────────────────────────────────────────────────────
 do
-    local descLbl = Instance.new("TextLabel", cfgMain)
-    descLbl.Size  = UDim2.new(0, CINNER, 0, 14)
-    descLbl.Position = UDim2.new(0, PAD, 0, CY2 - 6)
-    descLbl.BackgroundTransparency = 1
-    descLbl.Text  = "Delay entre: equipar cloner → ativar → teleportar ao clone"
-    descLbl.Font  = Enum.Font.Gotham
-    descLbl.TextSize = 8
-    descLbl.TextColor3 = Color3.fromRGB(110, 60, 180)
-    descLbl.ZIndex = 6
-    CY2 += 16
+    local speedSteps = {100, 200, 300, 400, 500, 600, 700, 800, 900, 1000}
+    CfgSliderStepped(
+        "TP SPEED",
+        nextY2(52, 8),
+        speedSteps,
+        Config.TpSpeed or 500,
+        "%d",
+        function(v) Config.TpSpeed = v; SaveConfig() end
+    )
+    CfgDescLabel("100 = Stable/Slow  |  500 = Default  |  1000 = Fast")
 end
+
+-- ── CLONE WAIT ────────────────────────────────────────────────────────────
+CfgSlider("CLONE WAIT (0.05s - 1.00s)", nextY2(52, 8),
+    0.05, 1.00, Config.CloneWait or 0.15, "%.2fs",
+    function(v) Config.CloneWait = math.floor(v*100)/100; SaveConfig() end)
+CfgDescLabel("Delay between: Equip Cloner > Activate > Teleport to Clone")
 
 MakeSep2(nextY2(0,0) - 2); CY2 += 8
 
@@ -1646,7 +1770,7 @@ local _, prioF = CfgBtn("☰ EDIT PRIORITY LIST", nextY2(40, 8),
 
 MakeSep2(nextY2(0,0) - 2); CY2 += 8
 
--- ── chips de status ───────────────────────────────────────────────────────
+-- ── Status chips ──────────────────────────────────────────────────────────
 local CHIP_W2 = math.floor((CINNER - 16) / 3)
 local chipsY2 = nextY2(38, 8)
 
