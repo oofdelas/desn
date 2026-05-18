@@ -277,6 +277,10 @@ local function isValidPrompt(prompt)
     return prompt.Enabled
 end
 
+-- ══════════════════════════════════════════════════════════════════════
+-- collectBrainrots — now returns ALL prompts (even busy ones)
+-- isStealable flag tells if we can steal right now or not
+-- ══════════════════════════════════════════════════════════════════════
 local function collectBrainrots()
     local stealable,allVisible={},{}
     local root=getRootPart()
@@ -308,32 +312,59 @@ local function collectBrainrots()
     return stealable,allVisible
 end
 
+-- ══════════════════════════════════════════════════════════════════════
+-- getTarget — CHANGED: locks onto target even if busy/unstealable
+-- Returns: prompt, isReady (true=can steal now, false=wait for it)
+-- ══════════════════════════════════════════════════════════════════════
 local function getTarget()
-    local all,_=collectBrainrots()
-    if #all==0 then return nil end
+    local stealable, allVisible = collectBrainrots()
 
+    -- If user selected a specific brainrot by UID, ALWAYS lock onto it
     if State.selectedUID then
-        for _,p in ipairs(all) do
-            if p.uid==State.selectedUID then return p.prompt end
+        for _,p in ipairs(allVisible) do
+            if p.uid==State.selectedUID then
+                return p.prompt, p.isStealable, p.name
+            end
         end
-        return nil
+        return nil, false, nil
     end
 
+    -- Method 1: Nearest (only stealable)
     if State.method==1 then
         local best,bd=nil,150
-        for _,p in ipairs(all) do if p.dist<bd then bd=p.dist; best=p.prompt end end
-        return best
+        local bestName = nil
+        for _,p in ipairs(stealable) do
+            if p.dist<bd then bd=p.dist; best=p.prompt; bestName=p.name end
+        end
+        return best, (best~=nil), bestName
+
+    -- Method 2: Priority — lock onto first priority found even if busy
     elseif State.method==2 then
         for _,wn in ipairs(State.priorityList) do
-            local bp,bi=nil,-1
-            for _,p in ipairs(all) do if p.name==wn and p.income>bi then bi=p.income; bp=p.prompt end end
-            if bp then return bp end
+            local bestEntry = nil
+            local bestIncome = -1
+            for _,p in ipairs(allVisible) do
+                if p.name==wn and p.income>bestIncome then
+                    bestIncome=p.income; bestEntry=p
+                end
+            end
+            if bestEntry then
+                return bestEntry.prompt, bestEntry.isStealable, bestEntry.name
+            end
         end
-        return nil
+        return nil, false, nil
+
+    -- Method 3: Highest gen — lock onto highest even if busy
     elseif State.method==3 then
         local best,bg=nil,-1
-        for _,p in ipairs(all) do if p.income>bg then bg=p.income; best=p.prompt end end
-        return best
+        local bestName = nil
+        local bestReady = false
+        for _,p in ipairs(allVisible) do
+            if p.income>bg then
+                bg=p.income; best=p.prompt; bestName=p.name; bestReady=p.isStealable
+            end
+        end
+        return best, bestReady, bestName
     end
 end
 
@@ -363,7 +394,6 @@ end
 local methodNames = {"NEAREST","PRIORITY","HIGHEST"}
 local methodColors = {Color3.fromRGB(80,200,120),Color3.fromRGB(255,180,60),Color3.fromRGB(255,90,200)}
 
--- GUI
 local gui=Instance.new("ScreenGui")
 gui.Name="AlbuxHub_AutoGrab"; gui.ResetOnSpawn=false
 gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; gui.DisplayOrder=99999
@@ -437,7 +467,6 @@ end
 local PAD = 12
 local INNER = 320-PAD*2
 
--- HEADER
 local HEADER_Y=10; local HEADER_H=40
 
 local header=Instance.new("Frame",main)
@@ -574,9 +603,7 @@ statusText.Text="Scanning..."; statusText.Position=UDim2.new(0,30,0,17); statusT
 statusText.BackgroundTransparency=1; statusText.Font=Enum.Font.GothamBlack; statusText.TextSize=14
 statusText.TextColor3=Color3.fromRGB(235,225,255); statusText.TextXAlignment=Enum.TextXAlignment.Left; statusText.ZIndex=7
 
--- ══════════════════════════════════════════════════════════════════════
--- TOGGLE BUTTON — redesigned to be much more visible and clearly clickable
--- ══════════════════════════════════════════════════════════════════════
+-- Toggle button
 local toggleBtn=Instance.new("TextButton",main)
 toggleBtn.Size=UDim2.new(0,INNER,0,42); toggleBtn.BackgroundColor3=Color3.fromRGB(15,45,25)
 toggleBtn.BorderSizePixel=0; toggleBtn.Text=""; toggleBtn.AutoButtonColor=false; toggleBtn.ZIndex=5
@@ -585,18 +612,15 @@ Instance.new("UICorner",toggleBtn).CornerRadius=UDim.new(0,12)
 local tStr=Instance.new("UIStroke",toggleBtn)
 tStr.Color=Color3.fromRGB(80,255,150); tStr.Thickness=2; tStr.Transparency=0; tStr.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
 
--- left green pill indicator
 local tPill=Instance.new("Frame",toggleBtn)
 tPill.Size=UDim2.fromOffset(4,24); tPill.Position=UDim2.new(0,12,0.5,-12)
 tPill.BackgroundColor3=Color3.fromRGB(80,255,150); tPill.BorderSizePixel=0; tPill.ZIndex=7
 Instance.new("UICorner",tPill).CornerRadius=UDim.new(0,3)
 
--- ON/OFF circle indicator
 local toggleCircle=Instance.new("Frame",toggleBtn)
 toggleCircle.Size=UDim2.fromOffset(14,14); toggleCircle.Position=UDim2.new(1,-30,0.5,-7)
 toggleCircle.BackgroundColor3=Color3.fromRGB(80,255,150); toggleCircle.BorderSizePixel=0; toggleCircle.ZIndex=8
 Instance.new("UICorner",toggleCircle).CornerRadius=UDim.new(1,0)
--- circle glow
 local circleGlow=Instance.new("ImageLabel",toggleBtn)
 circleGlow.AnchorPoint=Vector2.new(0.5,0.5); circleGlow.Position=UDim2.new(1,-23,0.5,0)
 circleGlow.Size=UDim2.fromOffset(30,30); circleGlow.BackgroundTransparency=1
@@ -604,28 +628,24 @@ circleGlow.Image="rbxassetid://5028857084"; circleGlow.ImageColor3=Color3.fromRG
 circleGlow.ImageTransparency=0.3; circleGlow.ScaleType=Enum.ScaleType.Slice
 circleGlow.SliceCenter=Rect.new(24,24,276,276); circleGlow.ZIndex=7
 
--- main label
 local toggleLabel=Instance.new("TextLabel",toggleBtn)
 toggleLabel.Size=UDim2.new(1,-60,0,18); toggleLabel.Position=UDim2.new(0,24,0,5)
 toggleLabel.BackgroundTransparency=1; toggleLabel.Text="▶  AUTO GRAB ● RUNNING"
 toggleLabel.Font=Enum.Font.GothamBlack; toggleLabel.TextSize=14
 toggleLabel.TextColor3=Color3.fromRGB(120,255,180); toggleLabel.TextXAlignment=Enum.TextXAlignment.Left; toggleLabel.ZIndex=8
 
--- sub label hint
 local toggleHint=Instance.new("TextLabel",toggleBtn)
 toggleHint.Size=UDim2.new(1,-60,0,12); toggleHint.Position=UDim2.new(0,24,0,25)
 toggleHint.BackgroundTransparency=1; toggleHint.Text="Click to pause auto grab"
 toggleHint.Font=Enum.Font.GothamBold; toggleHint.TextSize=9
 toggleHint.TextColor3=Color3.fromRGB(80,180,120); toggleHint.TextXAlignment=Enum.TextXAlignment.Left; toggleHint.ZIndex=8
 
--- animated gradient on background
 AnimGradient(toggleBtn, 0.006, ColorSequence.new{
     ColorSequenceKeypoint.new(0, Color3.fromRGB(10,35,20)),
     ColorSequenceKeypoint.new(0.5, Color3.fromRGB(20,60,35)),
     ColorSequenceKeypoint.new(1, Color3.fromRGB(10,35,20))
 })
 
--- hover effects
 toggleBtn.MouseEnter:Connect(function()
     Tween(toggleBtn,.15,{BackgroundColor3=Color3.fromRGB(20,55,35)})
     Tween(tStr,.15,{Thickness=2.5,Transparency=0})
@@ -642,7 +662,6 @@ toggleBtn.MouseButton1Down:Connect(function()
     Tween(toggleBtn,.06,{BackgroundColor3=Color3.fromRGB(30,70,45)})
 end)
 
--- progress bar
 local pbBg=Instance.new("Frame",main)
 pbBg.Size=UDim2.new(0,INNER,0,6); pbBg.BackgroundColor3=Color3.fromRGB(22,10,48); pbBg.BorderSizePixel=0; pbBg.ZIndex=5
 Instance.new("UICorner",pbBg).CornerRadius=UDim.new(1,0)
@@ -789,8 +808,17 @@ local function createRow(lo)
     prioLbl.Size=UDim2.new(1,0,1,0); prioLbl.BackgroundTransparency=1; prioLbl.Text="PRIORITY"
     prioLbl.Font=Enum.Font.GothamBlack; prioLbl.TextSize=8; prioLbl.TextColor3=Color3.fromRGB(20,10,5); prioLbl.ZIndex=8
 
+    -- busy tag (shows when someone else is stealing it)
+    local busyTag=Instance.new("Frame",row)
+    busyTag.Size=UDim2.fromOffset(40,15); busyTag.Position=UDim2.new(1,-60,1,-20)
+    busyTag.BackgroundColor3=Color3.fromRGB(255,80,60); busyTag.BorderSizePixel=0; busyTag.ZIndex=7; busyTag.Visible=false
+    Instance.new("UICorner",busyTag).CornerRadius=UDim.new(0,4)
+    local busyLbl=Instance.new("TextLabel",busyTag)
+    busyLbl.Size=UDim2.new(1,0,1,0); busyLbl.BackgroundTransparency=1; busyLbl.Text="BUSY"
+    busyLbl.Font=Enum.Font.GothamBlack; busyLbl.TextSize=8; busyLbl.TextColor3=Color3.fromRGB(255,255,255); busyLbl.ZIndex=8
+
     local selTag=Instance.new("Frame",row)
-    selTag.Size=UDim2.fromOffset(12,12); selTag.Position=UDim2.new(1,-18,1,-16)
+    selTag.Size=UDim2.fromOffset(12,12); selTag.Position=UDim2.new(1,-18,0.5,-6)
     selTag.BackgroundColor3=Color3.fromRGB(80,255,150); selTag.BorderSizePixel=0; selTag.ZIndex=9; selTag.Visible=false
     Instance.new("UICorner",selTag).CornerRadius=UDim.new(1,0)
     local sg=Instance.new("ImageLabel",selTag)
@@ -825,7 +853,7 @@ local function createRow(lo)
     local rd={
         row=row, clickBtn=clickBtn,
         rankBadge=rankBadge, rankLbl=rankLbl,
-        prioTag=prioTag, selTag=selTag,
+        prioTag=prioTag, busyTag=busyTag, selTag=selTag,
         nameLbl=nameLbl, incomeLbl=incomeLbl,
         mutBadge=mutBadge, mutLbl=mutLbl,
         stroke=rStroke,
@@ -885,6 +913,9 @@ local function applyRow(rd, entry, idx)
 
     rd.prioTag.Visible=entry.isPriority
 
+    -- Show BUSY tag when brainrot is being stolen by someone else
+    rd.busyTag.Visible=(not entry.isStealable)
+
     local isSel=(State.selectedUID==entry.uid)
     rd.selTag.Visible=isSel
 
@@ -914,14 +945,14 @@ refreshStealTargets=function()
         for _,p in ipairs(allVisible) do
             if p.name==wn and not usedUIDs[p.uid] then
                 usedUIDs[p.uid]=true
-                table.insert(combined,{name=p.name,income=p.income,isPriority=true,prompt=p.prompt,mutation=p.mutation,uid=p.uid})
+                table.insert(combined,{name=p.name,income=p.income,isPriority=true,prompt=p.prompt,mutation=p.mutation,uid=p.uid,isStealable=p.isStealable})
             end
         end
     end
     for _,p in ipairs(allVisible) do
         if not usedUIDs[p.uid] then
             usedUIDs[p.uid]=true
-            table.insert(combined,{name=p.name,income=p.income,isPriority=false,prompt=p.prompt,mutation=p.mutation,uid=p.uid})
+            table.insert(combined,{name=p.name,income=p.income,isPriority=false,prompt=p.prompt,mutation=p.mutation,uid=p.uid,isStealable=p.isStealable})
         end
     end
 
@@ -1119,9 +1150,7 @@ editListBtn.MouseButton1Click:Connect(function()
     if listVisible then cachedBrainrots=getAllBrainrots(); rebuildList() end
 end)
 
--- ══════════════════════════════════════════════════════════════════════
--- TOGGLE LOGIC — now updates the redesigned button visuals
--- ══════════════════════════════════════════════════════════════════════
+-- Toggle logic
 local function setAutoGrab(on)
     State.autoStealEnabled=on
     if on then
@@ -1152,6 +1181,9 @@ local function setAutoGrab(on)
     end
 end
 
+-- ══════════════════════════════════════════════════════════════════════
+-- executeSteal — only fires if prompt is ready, otherwise waits
+-- ══════════════════════════════════════════════════════════════════════
 local function executeSteal(prompt)
     if State.isStealing or not prompt or not prompt.Parent then return end
     State.isStealing=true; State.selectionChanged=false
@@ -1205,13 +1237,25 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 
+-- ══════════════════════════════════════════════════════════════════════
+-- MAIN LOOP — now handles "busy" brainrots by waiting instead of skipping
+-- ══════════════════════════════════════════════════════════════════════
 task.spawn(function()
     while not State.guiClosed do
         if State.autoStealEnabled and not State.isStealing then
-            local target=getTarget()
-            if target then
-                executeSteal(target)
-            else
+            local prompt, isReady, targetName = getTarget()
+
+            if prompt and isReady then
+                -- Prompt is available, steal it now
+                executeSteal(prompt)
+            elseif prompt and not isReady then
+                -- Prompt exists but busy (someone else is stealing it)
+                -- Wait for it instead of skipping to another target
+                statusText.Text="Waiting (busy): "..(targetName or "?")
+                statusText.TextColor3=Color3.fromRGB(255,160,60)
+                statusDot.BackgroundColor3=Color3.fromRGB(255,140,40)
+            elseif not prompt then
+                -- No target found at all
                 local selName=nil
                 if State.selectedUID then
                     for _,rd in ipairs(rowPool) do
@@ -1237,7 +1281,7 @@ task.spawn(function()
 end)
 
 applyTabVisuals()
-setAutoGrab(true) -- initialize visuals properly
+setAutoGrab(true)
 rebuildLayout(false)
 refreshStealTargets()
 
