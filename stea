@@ -71,6 +71,7 @@ game:GetService("StarterGui"):SetCore("SendNotification", {
 print("Script iniciado com sucesso!")
 
 
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
