@@ -37,7 +37,7 @@ do
     end
 end
 
-local CONFIG_FILE = "AlbuxTP_v2.json"
+local CONFIG_FILE = "AlbuxTP_v1.json"
 local DefaultConfig = {
     AutoTP          = true,
     MinGenForTp     = 0,
@@ -61,6 +61,7 @@ local DefaultConfig = {
     TpSpeed         = 500,
     CloneWait       = 0.15,
     TpV2            = false,
+    PriorityList    = nil,
 }
 local Config = DefaultConfig
 
@@ -307,24 +308,35 @@ local Decrypted = setmetatable({}, {
     end
 })
 
-local PRIORITY_LIST = {
-    "Headless Horseman","Signore Carapace","Strawberry Elephant","Meowl",
-    "Skibidi Toilet","Love Love Bear","Arcadragon","Griffin",
-    "Dragon Gingerini","Antonio","Elefanto Frigo","Ginger Gerat",
-    "Pancake and Syrup","Fishino Clownino","Dragon Cannelloni","Hydra Dragon Cannelloni",
-    "Ketupat Bros","La Casa Boo","Dug dug dug","Hydra Bunny",
-    "Bunny and Eggy","Tirilikalika Tirilikalako","Globa Steppa","Foxini Lanternini",
-    "Cerberus","Rosey and Teddy","Quackini Snackini","Cooki and Milki",
-    "Fragrama and Chocrama","Fragola La La La","Gym Bros","Los Chillis",
-    "Reinito Sleighito","Capitano Moby","Cash or Card","Boppin Bunny",
-    "Fortunu and Cashuru","Celestial Pegasus","Popcuru and Fizzuru","Chillin Chili",
-    "Burguro and Fryuro","Garama and Madundung","La Secret Combinasion","La Taco Combinasion",
-    "La Ginger Sekolah","Lavadorito Spinito","Los Spaghettis","Festive 67",
-    "Jolly Jolly Sahur","Orcaledon","Money Money Reindeer","Gold Gold Gold",
-    "Tralaledon","Tictac Sahur","Eviledon","Ketchuru and Musturu",
-    "Los Mariachis","Ketupat Kepat","Tang Tang Keletang","Spaghetti Tualetti",
-    "Los Hotspotsitos","La Sahur Combinasion"
+local DEFAULT_PRIORITY_LIST = {
+    "Headless Horseman","Signore Carapace","Strawberry Elephant","Arcadragon",
+    "Elefanto Frigo","Love Love Bear","John Pork","Meowl",
+    "Rico Dinero","Antonio","Skibidi Toilet","Pancake and Syrup",
+    "Dragon Gingerini","Griffin","Ginger Gerat","Globba Steppa",
+    "La Supreme Combinasion","Fishino Clownino","Dragon Cannelloni","Tirilikalika Trikala",
+    "Hydra Bunny","Kalika Bros","Digi Narwhale","Ketupat Bros",
+    "Hydra Dragon Cannelloni","Bunny and Eggy","Centrucci Nuclucci","Los Hackers",
+    "Dug dug dug","Rosey and Teddy","La Casa Boo","Duggy Bros",
+    "Cerberus","Money Money Bros","Gym Bros","Guest 666",
+    "John Doe","Burguro And Fryuro","Fragola La La La","Boppin Bunny",
+    "Cash or Card","Popcuru and Fizzuru","Foxini Laternini","Capitano Moby",
+    "La food combinasion","Los sekolahs","Los amigos","Spooky and Pumpky",
+    "Cooki and Milki","Celestial Pegasus","Garama and Madundung","Sammyni Fattini",
+    "Fortunu and Cashuru","La Secret Combinasion","Ketchuru and Musturu","Tralaledon",
+    "Tictac Sahur","Ketupat Kepat","Tang Tang Keletang","Orcaledon",
+    "La Ginger Sekolah","Lavadorito Spinito","La Taco Combinasion","Los Primos",
+    "Los Bros","Las Sis","Chillin Chili","W or L",
+    "Chipso and Queso"
 }
+
+local PRIORITY_LIST
+if Config.PriorityList and type(Config.PriorityList) == "table" and #Config.PriorityList > 0 then
+    PRIORITY_LIST = Config.PriorityList
+else
+    PRIORITY_LIST = DEFAULT_PRIORITY_LIST
+    Config.PriorityList = PRIORITY_LIST
+    SaveConfig()
+end
 
 local BASES_LOW = {
     [1]=Vector3.new(-485.19,-6.15,194.93),[5]=Vector3.new(-335.23,-6.15,194.93),
@@ -2903,7 +2915,11 @@ local function createPriorityGUI()
     Instance.new("UICorner",closeBtn).CornerRadius=UDim.new(0,8)
     closeBtn.MouseButton1Click:Connect(function() _priorityGui:Destroy(); _priorityGui=nil end)
 
-    local function savePriority() PRIORITY_LIST=priorityList end
+local function savePriority()
+    PRIORITY_LIST = priorityList
+    Config.PriorityList = priorityList
+    SaveConfig()
+end
     local refreshAllList,refreshPriorityList
 
     local function removeFromPriority(name)
