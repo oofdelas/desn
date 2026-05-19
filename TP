@@ -37,7 +37,7 @@ do
     end
 end
 
-local CONFIG_FILE = "LefaTP_v2.json"
+local CONFIG_FILE = "AlbuxTP_v2.json"
 local DefaultConfig = {
     AutoTP          = true,
     MinGenForTp     = 0,
@@ -949,7 +949,7 @@ end
 local function tweenGetFlySpeed(elapsed)
     local t = math.clamp(elapsed / 1.5, 0, 1)
     local ease = 1 - (1 - t) * (1 - t)
-    return 50 + (150 - 50) * ease
+    return 100 + (150 - 100) * ease
 end
 
 local function tweenFlyTo(hrp, goal, timeout)
@@ -1628,7 +1628,7 @@ local function runAutoSnipeV2(targetPetData)
         while hrp.Position.Y < targetHeight and (tick() - jumpStart) < 1.5 do
             hrp.AssemblyLinearVelocity = Vector3.new(
                 hrp.AssemblyLinearVelocity.X,
-                140,
+                80,
                 hrp.AssemblyLinearVelocity.Z
             )
             RunService.Heartbeat:Wait()
