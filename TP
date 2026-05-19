@@ -949,7 +949,7 @@ end
 local function tweenGetFlySpeed(elapsed)
     local t = math.clamp(elapsed / 1.5, 0, 1)
     local ease = 1 - (1 - t) * (1 - t)
-    return 100 + (150 - 100) * ease
+    return 130 + (150 - 130) * ease
 end
 
 local function tweenFlyTo(hrp, goal, timeout)
