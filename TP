@@ -1,6 +1,6 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 pcall(function() game:GetService("Players").RespawnTime = 0 end)
-task.wait(1)
+task.wait(1.5)
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
@@ -920,6 +920,8 @@ local function runAutoSnipeV1(targetPetData)
     stopCameraLock()
     State.isTpMoving = false
 end
+
+
 -- TP TWEEN (NOVO - sem ragdoll self, detecta lado mais próximo da BASE ALVO)
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -971,7 +973,7 @@ local function tweenFlyTo(hrp, goal, timeout)
 end
 
 local function tweenFlySmooth(hrp, hum, goal, speed, timeout)
-    speed   = speed   or 80
+    speed   = speed   or 150
     timeout = timeout or 15
     local char    = hrp.Parent
     local started = os.clock()
@@ -1128,47 +1130,93 @@ local function tweenFlyToWallAndConfirm(hum, hrp, char)
 end
 
 local function tweenDoClone(hrp, hum)
-    if _G.isCloning then return end
+    if _G.isCloning then return false end
     _G.isCloning = true
 
     local char = LocalPlayer.Character
-    if not char then _G.isCloning = false; return end
+    if not char or not hum or hum.Health <= 0 then
+        _G.isCloning = false
+        return false
+    end
 
     local quantum = LocalPlayer.Backpack:FindFirstChild("Quantum Cloner") or char:FindFirstChild("Quantum Cloner")
-    if not quantum then _G.isCloning = false; return end
+    if not quantum then
+        _G.isCloning = false
+        return false
+    end
 
     local toolsFrames = LocalPlayer.PlayerGui:FindFirstChild("ToolsFrames")
     local qcFrame     = toolsFrames and toolsFrames:FindFirstChild("QuantumCloner")
     local tpButton    = qcFrame and qcFrame:FindFirstChild("TeleportToClone")
-    if not tpButton then _G.isCloning = false; return end
+    if not tpButton then
+        _G.isCloning = false
+        return false
+    end
 
+    local oldPos = hrp and hrp.Position
+
+    -- mesma ideia da afundadinha, só que mais rápida
     if hrp then
-        for i = 1, 5 do
+        for i = 1, 3 do
             hrp.CFrame = hrp.CFrame - Vector3.new(0, 0.1, 0)
-            task.wait(0.05)
+            task.wait(0.015)
         end
     end
 
-    pcall(function() hum:EquipTool(quantum) end)
-    task.wait(0.1)
-    quantum:Activate()
-    task.wait(0.1)
+    -- equipa
+    pcall(function()
+        hum:EquipTool(quantum)
+    end)
+
+    local equipStart = tick()
+    while quantum.Parent ~= char and (tick() - equipStart) < 0.15 do
+        RunService.Heartbeat:Wait()
+    end
+
+    task.wait(0.03)
+
+    -- cria o clone
+    pcall(function()
+        quantum:Activate()
+    end)
 
     local cloneName = tostring(LocalPlayer.UserId) .. "_Clone"
-    for _ = 1, 100 do
-        if Workspace:FindFirstChild(cloneName) then break end
-        task.wait(0.1)
+    local cloneObj = nil
+    local cloneStart = tick()
+
+    -- checa mais rápido se o clone apareceu
+    while (tick() - cloneStart) < 1.5 do
+        cloneObj = Workspace:FindFirstChild(cloneName)
+        if cloneObj then
+            break
+        end
+        task.wait(0.02)
     end
 
-    if not Workspace:FindFirstChild(cloneName) then
+    if not cloneObj then
         _G.isCloning = false
-        return
+        return false
     end
 
+    -- AQUI fica exatamente o método original que fazia a troca
     tpButton.Visible = true
-    firesignal(tpButton.MouseButton1Up)
+    pcall(function()
+        firesignal(tpButton.MouseButton1Up)
+    end)
+
+    -- espera curtinha pra troca realmente concluir antes de liberar o fluxo
+    local swapStart = tick()
+    while (tick() - swapStart) < 0.25 do
+        local currentChar = LocalPlayer.Character
+        local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+        if currentHrp and oldPos and (currentHrp.Position - oldPos).Magnitude > 3 then
+            break
+        end
+        RunService.Heartbeat:Wait()
+    end
 
     _G.isCloning = false
+    return true
 end
 
 -- Detecção do lado mais próximo da BASE DO ALVO
@@ -1351,62 +1399,290 @@ local function runAutoSnipeV2(targetPetData)
     local char = LocalPlayer.Character
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     local hum  = char and char:FindFirstChild("Humanoid")
-    if not hrp or not hum or hum.Health <= 0 then State.isTpMoving = false; return end
+    if not hrp or not hum or hum.Health <= 0 then
+        State.isTpMoving = false
+        return
+    end
 
     local savedAutoRotate = hum.AutoRotate
     pcall(function() hum.AutoRotate = false end)
     _G._tpPlannedRot = nil
 
-    local targetPart = findAdorneeGlobal(targetPetData)
-    if not targetPart then
+    local ragdollConn = nil
+    local holdConn = nil
+
+    local function finish()
+        if ragdollConn then
+            ragdollConn:Disconnect()
+            ragdollConn = nil
+        end
+
+        if holdConn then
+            holdConn:Disconnect()
+            holdConn = nil
+        end
+
+        pcall(function()
+            if hrp then
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            end
+        end)
+
+        pcall(function()
+            if hum and hum.Health > 0 then
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end)
+
         pcall(function() hum.AutoRotate = savedAutoRotate end)
         State.isTpMoving = false
+    end
+
+    local targetPart = findAdorneeGlobal(targetPetData)
+    if not targetPart then
+        finish()
         return
     end
 
-    local plotObj = Workspace:FindFirstChild("Plots") and Workspace.Plots:FindFirstChild(targetPetData.plot)
+    local plotsFolder = Workspace:FindFirstChild("Plots")
+    local plotObj = plotsFolder and plotsFolder:FindFirstChild(targetPetData.plot)
 
-    -- Detecta o lado mais próximo DO PLAYER na base do ALVO
-    local sideSpot, approachRot, isSecondFloor = tweenGetClosestSideOfTargetBase(
-        hrp.Position,
-        targetPart.Position,
-        plotObj
-    )
+    local function getPlotRootPart(plot)
+        if not plot then return nil end
+        return plot:FindFirstChild("MainRootPart")
+            or plot:FindFirstChildWhichIsA("BasePart")
+    end
 
-    -- Equipa carpet antes de subir
+    local function getMapSide(pos)
+        if not pos then return nil end
+        return (pos.X < -400) and "left" or "right"
+    end
+
+    local function findMyPlotPos()
+        if not plotsFolder then return nil, nil end
+
+        for _, plot in ipairs(plotsFolder:GetChildren()) do
+            local sign = plot:FindFirstChild("PlotSign")
+            if sign then
+                local sg = sign:FindFirstChildWhichIsA("SurfaceGui", true)
+                if sg then
+                    local label = sg:FindFirstChildWhichIsA("TextLabel", true)
+                    if label then
+                        local text = label.Text:lower()
+                        if text:find(LocalPlayer.DisplayName:lower(), 1, true)
+                            or text:find(LocalPlayer.Name:lower(), 1, true) then
+                            local root = getPlotRootPart(plot)
+                            return plot.Name, root and root.Position or nil
+                        end
+                    end
+                end
+            end
+        end
+
+        return nil, nil
+    end
+
+    local function getColumnZExtremes(sideName)
+        if not plotsFolder or not sideName then return nil, nil end
+
+        local minZ, maxZ = math.huge, -math.huge
+        for _, plot in ipairs(plotsFolder:GetChildren()) do
+            local root = getPlotRootPart(plot)
+            if root and getMapSide(root.Position) == sideName then
+                if root.Position.Z < minZ then minZ = root.Position.Z end
+                if root.Position.Z > maxZ then maxZ = root.Position.Z end
+            end
+        end
+
+        if minZ == math.huge then return nil, nil end
+        return minZ, maxZ
+    end
+
+    local targetPlotRoot = getPlotRootPart(plotObj)
+    local targetPlotPos = targetPlotRoot and targetPlotRoot.Position or targetPart.Position
+
+    local myPlotName, myPlotPos = findMyPlotPos()
+    local mySide = getMapSide(myPlotPos)
+    local targetSide = getMapSide(targetPlotPos)
+
+    local isFrontBase = false
+    local isSideBase = false
+
+    if myPlotPos and myPlotName ~= targetPetData.plot then
+        local sameLaneZ = math.abs(myPlotPos.Z - targetPlotPos.Z) < 50
+
+        if mySide ~= targetSide and sameLaneZ then
+            isFrontBase = true
+
+        elseif mySide == targetSide then
+            local minZ = math.min(myPlotPos.Z, targetPlotPos.Z)
+            local maxZ = math.max(myPlotPos.Z, targetPlotPos.Z)
+            local basesBetween = 0
+
+            for _, plot in ipairs(plotsFolder:GetChildren()) do
+                local root = getPlotRootPart(plot)
+                if root and getMapSide(root.Position) == mySide then
+                    local pZ = root.Position.Z
+                    if pZ > (minZ + 10) and pZ < (maxZ - 10) then
+                        basesBetween = basesBetween + 1
+                    end
+                end
+            end
+
+            if basesBetween == 0 then
+                isSideBase = true
+            end
+        end
+    end
+
+    local function getForcedSideByZ(zDir)
+        local fakeFrom = Vector3.new(
+            targetPlotPos.X,
+            hrp.Position.Y,
+            targetPlotPos.Z + (120 * zDir)
+        )
+        return tweenGetClosestSideOfTargetBase(fakeFrom, targetPart.Position, plotObj)
+    end
+
+    local forcedZDir = nil
+
+    -- ============================================================
+    -- BASE DE CANTO: força lado oposto da barreira
+    -- ============================================================
+    do
+        local minZ, maxZ = getColumnZExtremes(targetSide)
+        local cornerTol = 25
+
+        if minZ and math.abs(targetPlotPos.Z - minZ) <= cornerTol then
+            forcedZDir = 1
+        elseif maxZ and math.abs(targetPlotPos.Z - maxZ) <= cornerTol then
+            forcedZDir = -1
+        end
+    end
+
+    -- ============================================================
+    -- BASE NA FRENTE: escolhe um lado e TERMINA no mesmo lado
+    -- ============================================================
+    if not forcedZDir and isFrontBase then
+        forcedZDir = (hrp.Position.Z < targetPlotPos.Z) and -1 or 1
+    end
+
+    local sideSpot, approachRot, isSecondFloor
+
+    if forcedZDir then
+        sideSpot, approachRot, isSecondFloor = getForcedSideByZ(forcedZDir)
+    end
+
+    if not sideSpot then
+        sideSpot, approachRot, isSecondFloor = tweenGetClosestSideOfTargetBase(
+            hrp.Position,
+            targetPart.Position,
+            plotObj
+        )
+    end
+
+    if not sideSpot or not approachRot then
+        finish()
+        return
+    end
+
+    -- ============================================================
+    -- EQUIPA O TAPETE + PHYSICS (RAGDOLL TEST)
+    -- ============================================================
     local carpet = LocalPlayer.Backpack:FindFirstChild(Config.Tool) or char:FindFirstChild(Config.Tool)
-    if carpet then hum:EquipTool(carpet) end
-    task.wait(0.01)
-    task.wait(0.15)
+    if carpet then
+        pcall(function()
+            hum:EquipTool(carpet)
+        end)
 
-    -- Aplica rotação já antes de subir
+        task.wait(0.03)
+
+        pcall(function()
+            hum:ChangeState(Enum.HumanoidStateType.Physics)
+        end)
+
+        ragdollConn = RunService.Heartbeat:Connect(function()
+            if hum and hum.Parent and hum.Health > 0 then
+                if hum:GetState() ~= Enum.HumanoidStateType.Physics then
+                    pcall(function()
+                        hum:ChangeState(Enum.HumanoidStateType.Physics)
+                    end)
+                end
+            end
+        end)
+    end
+
     hrp.CFrame = CFrame.new(hrp.Position) * approachRot
     task.wait(0.01)
 
-    -- Sobe com impulso
-    local targetHeight = sideSpot.Y + 10
-    local jumpStart = tick()
-    while hrp.Position.Y < targetHeight and (tick() - jumpStart) < 1.5 do
-        hrp.AssemblyLinearVelocity = Vector3.new(
-            hrp.AssemblyLinearVelocity.X, 140, hrp.AssemblyLinearVelocity.Z
-        )
-        RunService.Heartbeat:Wait()
+    -- ============================================================
+    -- MOVIMENTO ATÉ O sideSpot
+    -- ============================================================
+    if isSideBase then
+        tweenFlyTo(hrp, sideSpot, 8)
+    else
+        local targetHeight = sideSpot.Y + 10
+        local jumpStart = tick()
+
+        while hrp.Position.Y < targetHeight and (tick() - jumpStart) < 1.5 do
+            hrp.AssemblyLinearVelocity = Vector3.new(
+                hrp.AssemblyLinearVelocity.X,
+                140,
+                hrp.AssemblyLinearVelocity.Z
+            )
+            RunService.Heartbeat:Wait()
+        end
+
+        if isFrontBase then
+            local detourX = myPlotPos and ((myPlotPos.X + sideSpot.X) / 2) or ((hrp.Position.X + sideSpot.X) / 2)
+            local detourY = sideSpot.Y + 8
+            local detourZ = sideSpot.Z
+            local detourPos = Vector3.new(detourX, detourY, detourZ)
+
+            tweenFlyTo(hrp, detourPos, 8)
+            tweenFlyTo(hrp, sideSpot, 8)
+        else
+            local midX
+            if sideSpot.X < -400 then
+                midX = sideSpot.X + 25
+            else
+                midX = sideSpot.X - 25
+            end
+
+            local midZ = sideSpot.Z + (hrp.Position.Z - sideSpot.Z) * 0.40
+            local midY = math.max(sideSpot.Y + 6, 20)
+            local midPos = Vector3.new(midX, midY, midZ)
+
+            tweenFlyTo(hrp, midPos, 8)
+            tweenFlyTo(hrp, sideSpot, 8)
+        end
     end
 
-    -- Ponto intermediário de voo (meio do mapa)
-    local midPos = Vector3.new(-412, math.max(sideSpot.Y + 10, 37), sideSpot.Z)
-    tweenFlyTo(hrp, midPos, 10)
-
-    -- Voa para o lado certo da base do alvo
-    tweenFlyTo(hrp, sideSpot, 10)
-
-    -- Estabiliza
+    -- ============================================================
+    -- ESTABILIZA NO sideSpot + SAI DO PHYSICS
+    -- ============================================================
     tweenZeroVel(hrp)
     hrp.CFrame = CFrame.new(sideSpot) * approachRot
-    pcall(function() hrp.AssemblyAngularVelocity = Vector3.zero end)
+    pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
 
-    -- Mantém Y no 2o andar
-    local holdConn = nil
+    if ragdollConn then
+        ragdollConn:Disconnect()
+        ragdollConn = nil
+    end
+
+    pcall(function()
+        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+    end)
+
+    task.wait(0.08)
+
+    -- ============================================================
+    -- HOLD Y NO 2 ANDAR
+    -- ============================================================
     if isSecondFloor then
         holdConn = RunService.Heartbeat:Connect(function()
             if hrp and hrp.Parent then
@@ -1421,24 +1697,35 @@ local function runAutoSnipeV2(targetPetData)
         end)
     end
 
-    -- Encosta na parede
+    -- ============================================================
+    -- WALL SNAP
+    -- ============================================================
     tweenApproachWall(char, hrp, hum)
-
-    -- Fly para posição exata da parede
     local wallReady = tweenFlyToWallAndConfirm(hum, hrp, char)
 
-    -- Faz o clone — retorna imediatamente após pressionar o botão
-    if wallReady then
-        tweenDoClone(hrp, hum)
-        while _G.isCloning do task.wait() end
-        task.wait(0.05)
-        task.wait(0.15)
+    if holdConn then
+        holdConn:Disconnect()
+        holdConn = nil
     end
 
-    if holdConn then holdConn:Disconnect(); holdConn = nil end
-    task.wait(0.10)
+    pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
 
-    -- IMEDIATAMENTE vai ao brainrot com carpet
+    -- ============================================================
+    -- CLONE
+    -- ============================================================
+    if wallReady then
+        tweenDoClone(hrp, hum)
+        while _G.isCloning do
+            task.wait()
+        end
+    end
+
+    -- ============================================================
+    -- VAI AO BRAINROT
+    -- ============================================================
     local char2 = LocalPlayer.Character
     local hum2  = char2 and char2:FindFirstChildOfClass("Humanoid")
     local hrp2  = char2 and char2:FindFirstChild("HumanoidRootPart")
@@ -1448,8 +1735,7 @@ local function runAutoSnipeV2(targetPetData)
         tweenGoToBrainrot(hum2, hrp2, targetPart, _G._tpPlannedRot or approachRot)
     end
 
-    pcall(function() hum.AutoRotate = savedAutoRotate end)
-    State.isTpMoving = false
+    finish()
 end
 
 -- ══════════════════════════════════════════════════════════════════════════
