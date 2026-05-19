@@ -1,4 +1,82 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
+local HWIDs_Autorizados = {
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+    "a",
+}
+
+local hwid_atual = gethwid()
+local autorizado = false
+
+-- Check HWID
+for _, hwid in pairs(HWIDs_Autorizados) do
+    if hwid_atual == hwid then
+        autorizado = true
+        break
+    end
+end
+
+-- If not authorized
+if not autorizado then
+    -- Notification
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "⚠️ Access Denied";
+        Text = "Unauthorized HWID!";
+        Duration = 5;
+    })
+    
+    -- Wait 2 seconds and kick
+    wait(2)
+    game.Players.LocalPlayer:Kick("❌ ACCESS DENIED\n\nYour HWID is not whitelisted!\n\nBUY YOUR ACCESS AT:\ndiscord.gg/albuxhub")
+    return
+end
+
+-- Success notification
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "✓ Access Granted";
+    Text = "Script loaded successfully!";
+    Duration = 3;
+})
+
+print("Script started successfully!")
+
 pcall(function() game:GetService("Players").RespawnTime = 0 end)
 task.wait(1.5)
 
