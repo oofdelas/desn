@@ -1,6 +1,7 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 pcall(function() game:GetService("Players").RespawnTime = 0 end)
-task.wait(1)
+task.wait(2)
+
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
@@ -66,97 +67,7 @@ task.spawn(function()
     end
 end)
 
--- Camada 3: BasePart connector
-local function connectPartToPart(basePart, connecterPart)
-    if basePart:IsGrounded() then return end
 
-    local origMaterial       = connecterPart.Material
-    local origAnchored       = connecterPart.Anchored
-    local origCanCollide     = connecterPart.CanCollide
-    local origConPhysics     = connecterPart.CustomPhysicalProperties
-    local origConParent      = connecterPart.Parent
-    local origConCFrame      = connecterPart.CFrame
-    local origBaseParent     = basePart.Parent
-    local origBaseCanCollide = basePart.CanCollide
-    local origBaseName       = basePart.Name
-    local origBasePhysics    = basePart.CustomPhysicalProperties
-
-    local holderModel    = Instance.new("Model", Workspace)
-    local holderHumanoid = Instance.new("Humanoid", holderModel)
-    holderHumanoid.RequiresNeck        = false
-    holderHumanoid.BreakJointsOnDeath  = false
-    holderHumanoid.HipHeight           = 2
-
-    for _, state in ipairs(Enum.HumanoidStateType:GetEnumItems()) do
-        if state ~= Enum.HumanoidStateType.None and state ~= Enum.HumanoidStateType.Running then
-            holderHumanoid:SetStateEnabled(state, false)
-        end
-    end
-    holderHumanoid:ChangeState(Enum.HumanoidStateType.Running)
-
-    connecterPart.Material                 = Enum.Material.ClayRoofTiles
-    connecterPart.Parent                   = Workspace
-    connecterPart.CustomPhysicalProperties = PhysicalProperties.new(100, 0, 0)
-    connecterPart.Anchored                 = false
-    connecterPart.CanCollide               = true
-
-    basePart.CanCollide               = false
-    basePart.Name                     = "HumanoidRootPart"
-    basePart.CustomPhysicalProperties = PhysicalProperties.new(0.001, 0, 0)
-    basePart.Parent                   = holderModel
-
-    repeat
-        holderHumanoid:ChangeState(Enum.HumanoidStateType.Running)
-        connecterPart.CFrame                  = CFrame.new(origConCFrame.Position)
-        connecterPart.AssemblyLinearVelocity  = Vector3.zero
-        connecterPart.AssemblyAngularVelocity = Vector3.zero
-        basePart.CFrame                       = connecterPart.CFrame * CFrame.new(0, 2, 0)
-        basePart.AssemblyLinearVelocity       = Vector3.zero
-        basePart.AssemblyAngularVelocity      = Vector3.zero
-        RunService.Heartbeat:Wait()
-    until holderHumanoid.FloorMaterial == connecterPart.Material
-
-    holderHumanoid:Destroy()
-
-    basePart.Parent                   = origBaseParent
-    basePart.Name                     = origBaseName
-    basePart.CustomPhysicalProperties = origBasePhysics
-    basePart.CanCollide               = origBaseCanCollide
-
-    holderModel:Destroy()
-
-    connecterPart.Parent                   = origConParent
-    connecterPart.Anchored                 = origAnchored
-    connecterPart.Material                 = origMaterial
-    connecterPart.CustomPhysicalProperties = origConPhysics
-    connecterPart.CanCollide               = origCanCollide
-    connecterPart.CFrame                   = origConCFrame
-end
-
--- Aplica o connector quando o personagem spawna
-task.spawn(function()
-    local function applyConnector(char)
-        task.wait(1)
-        local hum  = char:FindFirstChildOfClass("Humanoid")
-        local root = hum and hum.RootPart
-        if not root or root:IsGrounded() then return end
-        local anchor = Instance.new("Part")
-        anchor.Size      = Vector3.new(4, 1, 4)
-        anchor.Anchored  = false
-        anchor.CanCollide = true
-        anchor.CFrame    = root.CFrame * CFrame.new(0, -3, 0)
-        anchor.Parent    = Workspace
-        pcall(connectPartToPart, root, anchor)
-        task.delay(15, function() pcall(function() anchor:Destroy() end) end)
-    end
-
-    if LocalPlayer.Character then
-        task.spawn(applyConnector, LocalPlayer.Character)
-    end
-    LocalPlayer.CharacterAdded:Connect(function(char)
-        task.spawn(applyConnector, char)
-    end)
-end)
 
 local CONFIG_FILE = "AlbuxTP_v1.json"
 local DefaultConfig = {
