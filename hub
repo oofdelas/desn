@@ -380,6 +380,8 @@ local DefaultConfig = {
     AutoUnlockOnSteal = false,
     ShowUnlockButtonsHUD = true,
     AutoTPOnFailedSteal = false,
+    DesyncEnabled = false,
+    DesyncMethod = "On Steal",
     KickKey = "",
     CleanErrorGUIs = false,
     ClickToAPSingleCommand = false,
@@ -732,6 +734,211 @@ Hub.AutoInvisDuringSteal = Config.AutoInvisDuringSteal
 Hub.INVISIBLE_STEAL_KEY = Enum.KeyCode[Config.InvisToggleKey] or Enum.KeyCode.I
 Hub.invisibleStealEnabled = false
 Hub.RecoveryInProgress = false
+
+Hub.Desync = Hub.Desync or {}
+do
+    local D = Hub.Desync
+    D.jumpTimer = D.jumpTimer or {0}
+    D.snapTimer = D.snapTimer or {0}
+    D.doubleTimer = D.doubleTimer or {0}
+    D.stealTimer = D.stealTimer or {0}
+    D.watchedFolders = D.watchedFolders or {}
+    D.lastPacketSend = D.lastPacketSend or os.clock()
+    D.lastHrpPos = nil
+    D.lastVel = D.lastVel or Vector3.new(0, 0, 0)
+    D.skipFrames = D.skipFrames or 0
+    D.stealPending = false
+    D.prevStealing = false
+    D.prevStealIdx = ""
+
+    local function desyncMethod()
+        return Config.DesyncMethod == "On Load" and "On Load" or "On Steal"
+    end
+
+    local function desyncActive()
+        return Config.DesyncEnabled == true
+    end
+
+    local function desyncAllowedForMethod()
+        if not desyncActive() then return false end
+        if desyncMethod() == "On Load" then return true end
+        return LocalPlayer:GetAttribute("Stealing") == true
+    end
+
+    local function getRoot()
+        local char = LocalPlayer.Character
+        return char and char:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function debounce(timer, delay)
+        local now = os.clock()
+        if now - timer[1] < (delay or 0.4) then return false end
+        timer[1] = now
+        return true
+    end
+
+    local function takeSnapshot()
+        local root = getRoot()
+        if root then
+            D.snapshotCFrame = root.CFrame
+        end
+    end
+
+    local function onLagback(method)
+        if not desyncAllowedForMethod() then return end
+        D.lastLagbackMethod = method
+        D.lastLagbackTime = os.clock()
+        takeSnapshot()
+        task.delay(0.15, takeSnapshot)
+    end
+
+    local function watchFolder(folder)
+        if not folder or D.watchedFolders[folder] then return end
+        D.watchedFolders[folder] = true
+        folder.ChildAdded:Connect(function(child)
+            if child.Name ~= "DoubleRig" then return end
+            task.defer(function()
+                task.wait(0.05)
+                local rr = child:FindFirstChild("HumanoidRootPart") or child:FindFirstChildWhichIsA("BasePart")
+                if rr and getRoot() and debounce(D.doubleTimer, 0.1) then
+                    onLagback("DoubleRig")
+                end
+            end)
+        end)
+    end
+
+    local function hookFolder()
+        local folder = workspace:FindFirstChild(LocalPlayer.Name)
+        if folder then
+            watchFolder(folder)
+        elseif not D.waitingForFolder then
+            D.waitingForFolder = true
+            workspace.ChildAdded:Connect(function(child)
+                if child.Name == LocalPlayer.Name then
+                    watchFolder(child)
+                end
+            end)
+        end
+    end
+
+    local function onStealDetected(reason)
+        if D.stealPending then return end
+        D.stealPending = true
+        task.delay(0.25, function()
+            if debounce(D.stealTimer) then
+                onLagback("Steal:" .. tostring(reason))
+            end
+            D.stealPending = false
+        end)
+    end
+
+    function Hub.RefreshDesync()
+        Config.DesyncMethod = desyncMethod()
+        D.enabled = desyncActive()
+        D.method = Config.DesyncMethod
+        if D.enabled then
+            takeSnapshot()
+        end
+    end
+
+    if not D.installed then
+        D.installed = true
+        hookFolder()
+
+        LocalPlayer.CharacterAdded:Connect(function()
+            D.lastHrpPos = nil
+            D.lastVel = Vector3.new(0, 0, 0)
+            D.skipFrames = 12
+            task.wait(0.5)
+            hookFolder()
+            if desyncActive() then
+                takeSnapshot()
+            end
+        end)
+
+        RunService.Heartbeat:Connect(function(dt)
+            if not desyncActive() then return end
+            if D.skipFrames > 0 then
+                D.skipFrames -= 1
+                return
+            end
+
+            local hrp = getRoot()
+            if not hrp then
+                D.lastHrpPos = nil
+                return
+            end
+
+            local cur = hrp.Position
+            if D.lastHrpPos then
+                local delta = cur - D.lastHrpPos
+                local mag = delta.Magnitude
+                if mag > 5 and debounce(D.jumpTimer) then
+                    onLagback("HRP-Jump " .. string.format("%.1f", mag) .. "st")
+                end
+                if mag > 3 and mag <= 5 and D.lastVel.Magnitude > 0.1 then
+                    local dot = delta.Unit:Dot(D.lastVel.Unit)
+                    if dot < -0.5 and debounce(D.snapTimer) then
+                        onLagback("Snap " .. string.format("%.1f", mag) .. "st")
+                    end
+                end
+                D.lastVel = D.lastVel:Lerp(delta / math.max(dt, 0.001), 0.4)
+            end
+            D.lastHrpPos = cur
+        end)
+
+        LocalPlayer:GetAttributeChangedSignal("StealingIndex"):Connect(function()
+            local value = LocalPlayer:GetAttribute("StealingIndex")
+            if type(value) == "string" and value ~= "" then
+                onStealDetected("idx=" .. value)
+            end
+        end)
+
+        LocalPlayer:GetAttributeChangedSignal("Stealing"):Connect(function()
+            if LocalPlayer:GetAttribute("Stealing") == true then
+                task.delay(0.3, function()
+                    if not D.stealPending then onStealDetected("backup") end
+                end)
+            else
+                D.stealPending = false
+            end
+        end)
+
+        RunService.Heartbeat:Connect(function()
+            local stealing = LocalPlayer:GetAttribute("Stealing") == true
+            local idx = tostring(LocalPlayer:GetAttribute("StealingIndex") or "")
+            if stealing and not D.prevStealing and not D.stealPending then
+                onStealDetected("poll")
+            end
+            if idx ~= "" and D.prevStealIdx == "" and not D.stealPending then
+                onStealDetected("idx_poll=" .. idx)
+            end
+            D.prevStealing = stealing
+            D.prevStealIdx = idx
+        end)
+
+        if raknet and raknet.add_send_hook and buffer and buffer.writeu32 then
+            raknet.add_send_hook(function(packet)
+                if not packet or not desyncAllowedForMethod() or packet.PacketId ~= 0x1B then return end
+                if os.clock() - D.lastPacketSend >= 6 then
+                    D.lastPacketSend = os.clock()
+                    task.defer(takeSnapshot)
+                    return
+                end
+                local ok = pcall(function()
+                    local data = packet.AsBuffer
+                    buffer.writeu32(data, 1, 0/0)
+                    packet:SetData(data)
+                end)
+                if not ok then
+                    D.lastPacketSend = os.clock()
+                end
+            end)
+        end
+    end
+
+    Hub.RefreshDesync()
+end
 
 local function getControls()
 	local playerScripts = LocalPlayer:WaitForChild("PlayerScripts")
@@ -1259,6 +1466,39 @@ end)
 
 Hub.GetInBase = function() return inBase end
 Hub.GetBaseOwner = function() return lastOwner end
+Hub.GetBaseOwnerAtPosition = function(pos)
+    if typeof(pos) ~= "Vector3" then return nil end
+    for uid, bounds in plotBoundsCache do
+        if pos.Y <= bounds.maxY and pos.Y >= -10
+           and math.abs(pos.X - bounds.cx) <= bounds.sx / 2
+           and math.abs(pos.Z - bounds.cz) <= bounds.sz / 2 then
+            return getPlotOwner(uid), uid
+        end
+    end
+    return nil
+end
+
+Hub.WaitForCloneBaseEntry = function(startInBase, startBaseOwner, timeout, expectedOwner, expectedPlot)
+    local started = tick()
+    repeat
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hrp and hum and hum.Health > 0 then
+            local owner, plotUid = nil, nil
+            if Hub.GetBaseOwnerAtPosition then
+                owner, plotUid = Hub.GetBaseOwnerAtPosition(hrp.Position)
+            end
+            owner = owner or (Hub.GetBaseOwner and Hub.GetBaseOwner())
+            local plotMatches = (not expectedPlot) or (plotUid and tostring(plotUid) == tostring(expectedPlot))
+            if owner and plotMatches and (not expectedOwner or owner == expectedOwner) and (not startInBase or owner ~= startBaseOwner) then
+                return true, owner
+            end
+        end
+        RunService.Heartbeat:Wait()
+    until tick() - started > (timeout or 3)
+    return false, nil
+end
 
 local function Clone(goToBrainrotAfterBase)
     if Hub.isCloning then return end
@@ -4328,10 +4568,18 @@ local function runGrapplerTP()
     local ok, err = pcall(function()
         Hub.GrapplerTP.ProxBefore = Hub.ProximityAPActive == true
         Hub.ProximityAPActive = false
+        Hub.GrapplerTP.StartInBase = Hub.GetInBase and Hub.GetInBase() or false
+        Hub.GrapplerTP.StartBaseOwner = Hub.GetBaseOwner and Hub.GetBaseOwner() or nil
+        Hub.GrapplerTP.CloneBaseEntered = false
+        Hub.GrapplerTP.CloneBaseOwner = nil
+        Hub.GrapplerTP.TargetBaseOwner = nil
+        Hub.GrapplerTP.TargetBasePlot = nil
         local selectedPetData = Hub.SelectedPetData
         local selectedData = selectedPetData and selectedPetData.animalData
         local selectedPart = selectedData and findAdorneeGlobal(selectedData)
         if selectedPart then
+            Hub.GrapplerTP.TargetBaseOwner = selectedData.plot and getPlotOwner(selectedData.plot) or nil
+            Hub.GrapplerTP.TargetBasePlot = selectedData.plot
             local char = LocalPlayer.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local entryPosition = nil
@@ -4376,55 +4624,64 @@ local function runGrapplerTP()
         end
 
         _G.VanishHubAfterCloneWait = function()
-            local started = tick()
-            local sawReadyCharacter = false
-            repeat
-                local char = LocalPlayer.Character
-                local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                local hum = char and char:FindFirstChildOfClass("Humanoid")
-                if hrp and hum and hum.Health > 0 then
-                    sawReadyCharacter = true
-                    if Hub.GetInBase and Hub.GetInBase() then
-                        break
-                    end
-                end
-                task.wait()
-            until tick() - started > 1.6
-            if sawReadyCharacter then
+            local entered, owner = false, nil
+            if Hub.WaitForCloneBaseEntry then
+                entered, owner = Hub.WaitForCloneBaseEntry(Hub.GrapplerTP.StartInBase, Hub.GrapplerTP.StartBaseOwner, 3.5, Hub.GrapplerTP.TargetBaseOwner, Hub.GrapplerTP.TargetBasePlot)
+            end
+            Hub.GrapplerTP.CloneBaseEntered = entered == true
+            Hub.GrapplerTP.CloneBaseOwner = owner
+            if entered then
                 RunService.Heartbeat:Wait()
             end
             return true
         end
 
         _G.VanishHubGoToSelectedBrainrot = function()
+            local goData = Hub.GrapplerGoToPetData or Hub.SelectedPetData
+            if not goData then return false end
+
             Hub.ProximityAPActive = false
-            if Hub.TweenToBrainrotAfterClone then
-                Hub.GrapplerGoToInProgress = true
-                Hub.GrapplerGoToToken = (Hub.GrapplerGoToToken or 0) + 1
-                local goToken = Hub.GrapplerGoToToken
+            if not Hub.GrapplerTP.CloneBaseEntered and Hub.WaitForCloneBaseEntry then
+                local entered, owner = Hub.WaitForCloneBaseEntry(Hub.GrapplerTP.StartInBase, Hub.GrapplerTP.StartBaseOwner, 4, Hub.GrapplerTP.TargetBaseOwner, Hub.GrapplerTP.TargetBasePlot)
+                Hub.GrapplerTP.CloneBaseEntered = entered == true
+                Hub.GrapplerTP.CloneBaseOwner = owner
+            end
+            if not Hub.GrapplerTP.CloneBaseEntered then
+                Hub.GrapplerTP.Busy = false
+                if Hub.GrapplerTP.ProxBefore ~= nil then
+                    Hub.ProximityAPActive = Hub.GrapplerTP.ProxBefore == true
+                    Hub.GrapplerTP.ProxBefore = nil
+                end
+                return false
+            end
+
+            Hub.PendingGoToBrainrotData = goData
+            Hub.GrapplerGoToInProgress = true
+
+            local function finishGrapplerGoTo()
+                Hub.GrapplerGoToInProgress = false
+                Hub.PendingGoToBrainrotData = nil
+                Hub.GoToBrainrotMoveToken = nil
+                if Hub.GrapplerTP.ProxBefore ~= nil then
+                    Hub.ProximityAPActive = Hub.GrapplerTP.ProxBefore == true
+                    Hub.GrapplerTP.ProxBefore = nil
+                end
+                Hub.GrapplerTP.Busy = false
+            end
+
+            if Hub.GoToSelectedBrainrotRetry then
+                return Hub.GoToSelectedBrainrotRetry(10, goData, function()
+                    finishGrapplerGoTo()
+                end)
+            elseif Hub.GoToSelectedBrainrot then
                 task.spawn(function()
-                    local ok = false
-                    for _ = 1, 4 do
-                        if Hub.GrapplerGoToToken ~= goToken then return end
-                        ok = Hub.TweenToBrainrotAfterClone(Hub.GrapplerGoToPetData)
-                        if ok then break end
-                        task.wait(0.08)
-                    end
-                    if Hub.GrapplerGoToToken ~= goToken then return end
-                    Hub.GrapplerGoToInProgress = false
-                    if Hub.GrapplerTP.ProxBefore ~= nil then
-                        Hub.ProximityAPActive = Hub.GrapplerTP.ProxBefore == true
-                        Hub.GrapplerTP.ProxBefore = nil
-                    end
-                    Hub.GrapplerTP.Busy = false
+                    pcall(Hub.GoToSelectedBrainrot)
+                    finishGrapplerGoTo()
                 end)
                 return true
-            elseif Hub.GoToSelectedBrainrotRetry then
-                return Hub.GoToSelectedBrainrotRetry(12, Hub.GrapplerGoToPetData)
-            elseif Hub.GoToSelectedBrainrot then
-                task.spawn(Hub.GoToSelectedBrainrot)
-                return true
             end
+
+            finishGrapplerGoTo()
             return false
         end
 
@@ -11073,6 +11330,18 @@ end)
             if Hub.UpdateBrainrotSelectionUI then 
                 Hub.UpdateBrainrotSelectionUI() 
             end
+        end)
+
+        createSectionHeader(stealingScroll, "DESYNC")
+        createToggleRow(stealingScroll, "Desync", "Enable integrated desync method", Config.DesyncEnabled or false, function(val)
+            Config.DesyncEnabled = val
+            SaveConfig()
+            if Hub.RefreshDesync then Hub.RefreshDesync() end
+        end)
+        createDropdownRow(stealingScroll, "Desync Method", "Choose when desync packets are applied", {"On Steal", "On Load"}, Config.DesyncMethod or "On Steal", function(val)
+            Config.DesyncMethod = val
+            SaveConfig()
+            if Hub.RefreshDesync then Hub.RefreshDesync() end
         end)
     end
     
